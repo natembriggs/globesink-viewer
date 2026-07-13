@@ -1,0 +1,421 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GLOBESINK viewer</title>
+<style>
+  :root { --bg:#fff; --panel:#f7f8fa; --line:#d0d4da; --ink:#1a1d21; --muted:#6a7078; --accent:#c026d3; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:13px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; color:var(--ink); background:var(--bg); }
+  header { padding:10px 14px; border-bottom:1px solid var(--line); display:flex; flex-wrap:wrap; gap:14px 18px; align-items:flex-end; }
+  .grp { display:flex; flex-direction:column; gap:3px; }
+  .grp label { font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:.04em; }
+  select, input[type=number], button, input[type=file] { font:inherit; padding:4px 6px; border:1px solid var(--line); border-radius:5px; background:#fff; color:var(--ink); }
+  button { cursor:pointer; }
+  .seg { display:inline-flex; border:1px solid var(--line); border-radius:5px; overflow:hidden; }
+  .seg button { border:0; border-radius:0; padding:4px 9px; background:#fff; }
+  .seg button.on { background:var(--ink); color:#fff; }
+  .range-in { width:74px; }
+  #conds { padding:8px 14px; border-bottom:1px solid var(--line); background:var(--panel); }
+  #conds h4 { margin:0 0 6px; font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:.04em; }
+  .cond { display:flex; gap:6px; align-items:center; margin-bottom:5px; flex-wrap:wrap; }
+  .cond .x { border-color:#e0a0c0; color:var(--accent); }
+  #plots { display:flex; flex-wrap:wrap; gap:6px; padding:10px; }
+  .panelwrap { flex:1 1 460px; min-width:340px; }
+  .panelwrap h3 { margin:0 0 4px; font-size:13px; font-weight:600; text-align:center; }
+  canvas { width:100%; height:auto; display:block; touch-action:none; cursor:crosshair; }
+  #status { padding:6px 14px; border-top:1px solid var(--line); color:var(--muted); font-size:12px; min-height:26px; }
+  .hint { color:var(--muted); font-size:11px; }
+  a { color:var(--accent); }
+</style>
+</head>
+<body>
+<header>
+  <div class="grp">
+    <label>Dataset</label>
+    <div style="display:flex;gap:6px">
+      <select id="exampleSel">
+        <option value="example_data/globesink_example.nc">example: raw 4°×8°</option>
+        <option value="example_data/globesink_example_interpolated.nc">example: interpolated 2°×2°</option>
+      </select>
+      <input type="file" id="fileIn" accept=".nc">
+    </div>
+  </div>
+  <div class="grp"><label>Variable</label><select id="varSel"></select></div>
+  <div class="grp"><label>Colormap</label>
+    <select id="cmapSel">
+      <option value="greens">Greens</option>
+      <option value="viridis">Viridis</option>
+      <option value="thermal">Thermal</option>
+      <option value="gray">Gray</option>
+    </select>
+  </div>
+  <div class="grp"><label>Scale</label>
+    <div class="seg" id="scaleSeg"><button data-v="lin" class="on">Linear</button><button data-v="log">Log</button></div>
+  </div>
+  <div class="grp"><label>Missing values</label>
+    <div class="seg" id="missSeg"><button data-v="ignore" class="on">Ignore in mean</button><button data-v="strict">Missing if any</button></div>
+  </div>
+  <div class="grp"><label>Colour range</label>
+    <div style="display:flex;gap:6px;align-items:center">
+      <label class="hint"><input type="checkbox" id="autoRange" checked> auto</label>
+      <input type="number" id="vmin" class="range-in" step="any" disabled>
+      <input type="number" id="vmax" class="range-in" step="any" disabled>
+    </div>
+  </div>
+</header>
+
+<div id="conds">
+  <h4>Conditions — include a cell only if all pass (evaluated on other variables)</h4>
+  <div id="condList"></div>
+  <button id="addCond">+ add condition</button>
+</div>
+
+<div id="plots">
+  <div class="panelwrap">
+    <h3 id="secTitle">time × depth section</h3>
+    <canvas id="secCanvas"></canvas>
+    <div class="hint" style="text-align:center">Drag a month × depth box here → updates the map.</div>
+  </div>
+  <div class="panelwrap">
+    <h3 id="mapTitle">map</h3>
+    <canvas id="mapCanvas"></canvas>
+    <div class="hint" style="text-align:center">Drag a lat × lon box here → updates the section.</div>
+  </div>
+</div>
+
+<div id="status">Loading example dataset…</div>
+
+<script src="vendor/hdf5.js"></script>
+<script src="src/core.js"></script>
+<script>
+"use strict";
+var MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+var MISSING_COLOR = [228,230,233];
+
+// ---- colormaps (control stops, 0..255) ----
+var CMAPS = {
+  greens: [[247,252,245],[199,233,192],[116,196,118],[35,139,69],[0,68,27]],
+  viridis:[[68,1,84],[65,68,135],[42,120,142],[34,168,132],[122,209,81],[253,231,37]],
+  thermal:[[4,35,51],[59,28,108],[123,32,110],[181,54,86],[224,96,54],[248,157,54],[251,225,140]],
+  gray:   [[255,255,255],[20,20,22]]
+};
+function ramp(stops, t) {
+  t = t < 0 ? 0 : t > 1 ? 1 : t;
+  var n = stops.length - 1, f = t * n, i = Math.min(n - 1, Math.floor(f)), a = f - i;
+  var s0 = stops[i], s1 = stops[i + 1];
+  return [s0[0]+(s1[0]-s0[0])*a, s0[1]+(s1[1]-s0[1])*a, s0[2]+(s1[2]-s0[2])*a];
+}
+
+// ---- app state ----
+var S = {
+  model: null, varName: null, cmap: 'greens', log: false, strict: false,
+  autoRange: true, vmin: 0, vmax: 1,
+  boxLL: null,  // {y0,y1,x0,x1} lat/lon index box -> section
+  boxTD: null,  // {p0,p1,m0,m1} depth/month index box -> map
+  conditions: [], keep: null,
+  secArr: null, mapArr: null
+};
+
+function fmtLat(v){ return (Math.abs(v)).toFixed(0) + (v>=0?'°N':'°S'); }
+function fmtLon(v){ return (Math.abs(v)).toFixed(0) + (v>=0?'°E':'°W'); }
+
+// ---------- data loading ----------
+function loadModelFromBuffer(ab, name) {
+  try {
+    var model = GVCore.parseNetCDF(ab, name);
+    S.model = model;
+    if (!model.varNames.length) { setStatus('No 4-D variables found in ' + name); return; }
+    // variable dropdown
+    var vs = document.getElementById('varSel');
+    vs.innerHTML = '';
+    model.varNames.forEach(function (n) {
+      var o = document.createElement('option'); o.value = n;
+      o.textContent = n + (model.vars[n].units ? '  ('+model.vars[n].units+')' : '');
+      vs.appendChild(o);
+    });
+    S.varName = model.varNames.indexOf('CHLA_ADJUSTED_baseline') >= 0 ? 'CHLA_ADJUSTED_baseline' : model.varNames[0];
+    vs.value = S.varName;
+    // defaults: section = whole globe; map = annual, depth bin index 1 (10-50 m)
+    S.boxLL = { y0: 0, y1: model.sizes.lat - 1, x0: 0, x1: model.sizes.lon - 1 };
+    var d1 = Math.min(1, model.sizes.depth - 1);
+    S.boxTD = { p0: d1, p1: d1, m0: 0, m1: model.sizes.month - 1 };
+    rebuildCondVarOptions();
+    recomputeKeep();
+    recomputeAll();
+    setStatus('Loaded ' + name + ' — ' + model.varNames.length + ' variables, grid ' +
+      model.sizes.depth + '×' + model.sizes.lat + '×' + model.sizes.lon + '×' + model.sizes.month +
+      ' (depth×lat×lon×month).');
+  } catch (e) {
+    setStatus('Failed to read ' + name + ': ' + e.message);
+    throw e;
+  }
+}
+function loadExample(url) {
+  setStatus('Loading ' + url + ' …');
+  fetch(url).then(function (r) {
+    if (!r.ok) throw new Error('HTTP ' + r.status + ' (serve the folder over http, see README)');
+    return r.arrayBuffer();
+  }).then(function (ab) { loadModelFromBuffer(ab, url.split('/').pop()); })
+    .catch(function (e) { setStatus('Could not fetch ' + url + ': ' + e.message); });
+}
+
+// ---------- compute ----------
+function recomputeKeep() {
+  S.keep = GVCore.buildKeepMask(S.model, S.conditions);
+}
+function recomputeAll() {
+  if (!S.model || !S.varName) return;
+  var m = S.model;
+  S.secArr = GVCore.sectionReduce(m, S.varName, S.keep, S.strict, [S.boxLL.y0, S.boxLL.y1], [S.boxLL.x0, S.boxLL.x1]);
+  S.mapArr = GVCore.mapReduce(m, S.varName, S.keep, S.strict, [S.boxTD.p0, S.boxTD.p1], [S.boxTD.m0, S.boxTD.m1]);
+  if (S.autoRange) {
+    var both = new Float32Array(S.secArr.length + S.mapArr.length);
+    both.set(S.secArr, 0); both.set(S.mapArr, S.secArr.length);
+    var lim = GVCore.robustLimits(both, 0.02, 0.98, S.log);
+    S.vmin = lim[0]; S.vmax = lim[1];
+    document.getElementById('vmin').value = fmtNum(S.vmin);
+    document.getElementById('vmax').value = fmtNum(S.vmax);
+  }
+  updateTitles();
+  draw();
+}
+function fmtNum(v){ var a=Math.abs(v); return a && (a<1e-3||a>=1e5) ? v.toExponential(2) : (+v.toPrecision(4)).toString(); }
+
+function norm(v) {
+  if (isNaN(v)) return NaN;
+  if (S.log) {
+    if (v <= 0 || S.vmin <= 0) return NaN;
+    return (Math.log(v) - Math.log(S.vmin)) / (Math.log(S.vmax) - Math.log(S.vmin));
+  }
+  return (v - S.vmin) / (S.vmax - S.vmin);
+}
+
+function updateTitles() {
+  var c = S.model.coords;
+  var la0 = c.lat[S.boxLL.y0], la1 = c.lat[S.boxLL.y1], lo0 = c.lon[S.boxLL.x0], lo1 = c.lon[S.boxLL.x1];
+  var latLo = Math.min(la0,la1), latHi = Math.max(la0,la1), lonLo = Math.min(lo0,lo1), lonHi = Math.max(lo0,lo1);
+  document.getElementById('secTitle').textContent =
+    'lat ' + fmtLat(latLo) + '–' + fmtLat(latHi) + ',  lon ' + fmtLon(lonLo) + '–' + fmtLon(lonHi);
+  var de0 = c.depthEdges[S.boxTD.p0], de1 = c.depthEdges[S.boxTD.p1 + 1];
+  var mo = (S.boxTD.m0 === 0 && S.boxTD.m1 === S.model.sizes.month - 1) ? 'annual' :
+           (MONTHS[S.boxTD.m0] + '–' + MONTHS[S.boxTD.m1]);
+  document.getElementById('mapTitle').textContent = mo + ',  ' + Math.round(de0) + '–' + Math.round(de1) + ' m';
+}
+
+// ---------- drawing ----------
+var MARG = { l: 54, r: 78, t: 10, b: 34 };  // r leaves room for colorbar
+function setupCanvas(cv, cssW, cssH) {
+  var dpr = window.devicePixelRatio || 1;
+  cv.width = cssW * dpr; cv.height = cssH * dpr;
+  cv.style.height = cssH + 'px';
+  var ctx = cv.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  return ctx;
+}
+function plotRect(cssW, cssH) {
+  return { x: MARG.l, y: MARG.t, w: cssW - MARG.l - MARG.r, h: cssH - MARG.t - MARG.b };
+}
+
+function drawCells(ctx, R, cols, rows, xEdgePix, yEdgePix, valueAt) {
+  for (var r = 0; r < rows; r++) {
+    for (var c = 0; c < cols; c++) {
+      var v = valueAt(r, c);
+      var col;
+      if (isNaN(v)) col = MISSING_COLOR;
+      else { var t = norm(v); col = isNaN(t) ? MISSING_COLOR : ramp(CMAPS[S.cmap], t); }
+      var x0 = xEdgePix(c), x1 = xEdgePix(c + 1), y0 = yEdgePix(r), y1 = yEdgePix(r + 1);
+      ctx.fillStyle = 'rgb(' + (col[0]|0) + ',' + (col[1]|0) + ',' + (col[2]|0) + ')';
+      ctx.fillRect(Math.floor(Math.min(x0,x1)), Math.floor(Math.min(y0,y1)),
+                   Math.ceil(Math.abs(x1-x0))+1, Math.ceil(Math.abs(y1-y0))+1);
+    }
+  }
+}
+function axisStyle(ctx){ ctx.fillStyle='#333'; ctx.strokeStyle='#888'; ctx.font='11px sans-serif'; ctx.lineWidth=1; }
+function frame(ctx,R){ ctx.strokeStyle='#333'; ctx.lineWidth=1; ctx.strokeRect(R.x+.5,R.y+.5,R.w,R.h); }
+
+function drawColorbar(ctx, cssW, R, label) {
+  var bw = 14, bx = cssW - MARG.r + 16, by = R.y, bh = R.h;
+  var g = ctx.createLinearGradient(0, by + bh, 0, by);
+  for (var i = 0; i <= 10; i++) { var col = ramp(CMAPS[S.cmap], i/10); g.addColorStop(i/10, 'rgb('+(col[0]|0)+','+(col[1]|0)+','+(col[2]|0)+')'); }
+  ctx.fillStyle = g; ctx.fillRect(bx, by, bw, bh);
+  ctx.strokeStyle = '#888'; ctx.strokeRect(bx+.5, by+.5, bw, bh);
+  axisStyle(ctx); ctx.fillStyle = '#333'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+  var nt = 5;
+  for (var k = 0; k <= nt; k++) {
+    var frac = k / nt, yy = by + bh - frac * bh, val;
+    if (S.log) val = Math.exp(Math.log(S.vmin) + frac * (Math.log(S.vmax) - Math.log(S.vmin)));
+    else val = S.vmin + frac * (S.vmax - S.vmin);
+    ctx.fillText(fmtNum(val), bx + bw + 4, yy);
+  }
+  ctx.save(); ctx.translate(cssW - 6, by + bh / 2); ctx.rotate(Math.PI / 2);
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = '#333';
+  ctx.fillText(label, 0, 0); ctx.restore();
+}
+
+function selRect(ctx, x0, y0, x1, y1) {
+  ctx.save();
+  ctx.strokeStyle = 'rgba(192,38,211,0.95)'; ctx.lineWidth = 1.5;
+  ctx.fillStyle = 'rgba(192,38,211,0.06)';
+  var x = Math.min(x0,x1), y = Math.min(y0,y1), w = Math.abs(x1-x0), h = Math.abs(y1-y0);
+  ctx.fillRect(x, y, w, h); ctx.strokeRect(x + .5, y + .5, w, h);
+  ctx.restore();
+}
+
+// ----- section panel (left): x=month, y=depth -----
+var secGeom = null;
+function drawSection() {
+  var cv = document.getElementById('secCanvas');
+  var cssW = cv.parentElement.clientWidth, cssH = Math.max(300, Math.round(cssW * 0.72));
+  var ctx = setupCanvas(cv, cssW, cssH), R = plotRect(cssW, cssH);
+  var m = S.model, nP = m.sizes.depth, nM = m.sizes.month;
+  var dTop = m.coords.depthEdges[0], dBot = m.coords.depthEdges[nP];
+  var xEdgePix = function (c) { return R.x + (c / nM) * R.w; };
+  var yEdgePix = function (r) { return R.y + ((m.coords.depthEdges[r] - dTop) / (dBot - dTop)) * R.h; };
+  ctx.clearRect(0,0,cssW,cssH);
+  drawCells(ctx, R, nM, nP, xEdgePix, yEdgePix, function (r, c) { return S.secArr[r * nM + c]; });
+  frame(ctx, R);
+  // axes
+  axisStyle(ctx); ctx.textAlign='center'; ctx.textBaseline='top';
+  for (var mi = 0; mi < nM; mi++) ctx.fillText(MONTHS[mi], (xEdgePix(mi)+xEdgePix(mi+1))/2, R.y+R.h+5);
+  ctx.textAlign='right'; ctx.textBaseline='middle';
+  var dticks=[0,200,400,600,800,1000,1200,1400,1600,1800,2000];
+  dticks.forEach(function(dv){ if(dv>=dTop&&dv<=dBot){ var yy=R.y+((dv-dTop)/(dBot-dTop))*R.h; ctx.beginPath();ctx.moveTo(R.x-3,yy);ctx.lineTo(R.x,yy);ctx.stroke(); ctx.fillText(dv, R.x-6, yy);} });
+  ctx.save(); ctx.translate(14, R.y+R.h/2); ctx.rotate(-Math.PI/2); ctx.textAlign='center'; ctx.textBaseline='middle'; ctx.fillText('depth (m)',0,0); ctx.restore();
+  drawColorbar(ctx, cssW, R, varLabel());
+  // persistent selection (month×depth box that drives the map)
+  var sx0=xEdgePix(S.boxTD.m0), sx1=xEdgePix(S.boxTD.m1+1), sy0=yEdgePix(S.boxTD.p0), sy1=yEdgePix(S.boxTD.p1+1);
+  selRect(ctx, sx0, sy0, sx1, sy1);
+  secGeom = { R:R, cv:cv, xEdgePix:xEdgePix, yEdgePix:yEdgePix, nCols:nM, nRows:nP };
+}
+
+// ----- map panel (right): x=lon, y=lat -----
+var mapGeom = null;
+function drawMap() {
+  var cv = document.getElementById('mapCanvas');
+  var cssW = cv.parentElement.clientWidth, cssH = Math.max(300, Math.round(cssW * 0.62));
+  var ctx = setupCanvas(cv, cssW, cssH), R = plotRect(cssW, cssH);
+  var m = S.model, nY = m.sizes.lat, nX = m.sizes.lon;
+  var latE = m.coords.latEdges, lonE = m.coords.lonEdges;
+  var lat0 = latE[0], lat1 = latE[nY], lon0 = lonE[0], lon1 = lonE[nX];
+  var xEdgePix = function (c) { return R.x + ((lonE[c] - lon0) / (lon1 - lon0)) * R.w; };
+  var yEdgePix = function (r) { return R.y + (1 - (latE[r] - lat0) / (lat1 - lat0)) * R.h; }; // lat up
+  ctx.clearRect(0,0,cssW,cssH);
+  drawCells(ctx, R, nX, nY, xEdgePix, yEdgePix, function (r, c) { return S.mapArr[r * nX + c]; });
+  frame(ctx, R);
+  axisStyle(ctx); ctx.textAlign='center'; ctx.textBaseline='top';
+  [-180,-120,-60,0,60,120,180].forEach(function(lv){ if(lv>=Math.min(lon0,lon1)&&lv<=Math.max(lon0,lon1)){ var xx=R.x+((lv-lon0)/(lon1-lon0))*R.w; ctx.beginPath();ctx.moveTo(xx,R.y+R.h);ctx.lineTo(xx,R.y+R.h+3);ctx.stroke(); ctx.fillText(lv, xx, R.y+R.h+5);} });
+  ctx.textAlign='right'; ctx.textBaseline='middle';
+  [-60,-30,0,30,60].forEach(function(lv){ if(lv>=Math.min(lat0,lat1)&&lv<=Math.max(lat0,lat1)){ var yy=R.y+(1-(lv-lat0)/(lat1-lat0))*R.h; ctx.beginPath();ctx.moveTo(R.x-3,yy);ctx.lineTo(R.x,yy);ctx.stroke(); ctx.fillText(lv, R.x-6, yy);} });
+  drawColorbar(ctx, cssW, R, varLabel());
+  var sx0=xEdgePix(S.boxLL.x0), sx1=xEdgePix(S.boxLL.x1+1), sy0=yEdgePix(S.boxLL.y0), sy1=yEdgePix(S.boxLL.y1+1);
+  selRect(ctx, sx0, sy0, sx1, sy1);
+  mapGeom = { R:R, cv:cv, nCols:nX, nRows:nY, lonE:lonE, latE:latE, lon0:lon0, lon1:lon1, lat0:lat0, lat1:lat1 };
+}
+function varLabel(){ var v=S.model.vars[S.varName]; return v.name + (v.units?' ('+v.units+')':'') + (S.log?' [log]':''); }
+function draw(){ if(!S.model) return; drawSection(); drawMap(); }
+
+// ---------- interaction ----------
+function attachDrag(getGeom, onBox) {
+  var dragging = false, sx = 0, sy = 0, curCtx = null;
+  function pos(ev, cv) { var b = cv.getBoundingClientRect(); return { x: ev.clientX - b.left, y: ev.clientY - b.top }; }
+  function down(ev) {
+    var g = getGeom(); if (!g) return; var p = pos(ev, g.cv);
+    if (p.x < g.R.x || p.x > g.R.x + g.R.w || p.y < g.R.y || p.y > g.R.y + g.R.h) return;
+    dragging = true; sx = p.x; sy = p.y; ev.preventDefault();
+  }
+  function move(ev) {
+    if (!dragging) return; var g = getGeom(); var p = pos(ev, g.cv);
+    draw(); // repaint base
+    var ctx = g.cv.getContext('2d'); var dpr = window.devicePixelRatio||1; ctx.setTransform(dpr,0,0,dpr,0,0);
+    selRect(ctx, sx, sy, clamp(p.x, g.R.x, g.R.x+g.R.w), clamp(p.y, g.R.y, g.R.y+g.R.h));
+  }
+  function up(ev) {
+    if (!dragging) return; dragging = false; var g = getGeom(); var p = pos(ev, g.cv);
+    var ex = clamp(p.x, g.R.x, g.R.x+g.R.w), ey = clamp(p.y, g.R.y, g.R.y+g.R.h);
+    onBox(g, sx, sy, ex, ey);
+  }
+  document.addEventListener('mousemove', move);
+  document.addEventListener('mouseup', up);
+  return down;
+}
+function clamp(v,a,b){ return v<a?a:v>b?b:v; }
+
+function initInteraction() {
+  var m = function(){ return S.model.coords; };
+  var secCv = document.getElementById('secCanvas');
+  secCv.addEventListener('mousedown', attachDrag(function(){return secGeom;}, function (g, x0, y0, x1, y1) {
+    var c = m();
+    // pixel -> data value, then -> cell range (tested in core)
+    var monthVal = function(px){ return c.monthEdges[0] + (px - g.R.x)/g.R.w * (c.monthEdges[g.nCols] - c.monthEdges[0]); };
+    var depthVal = function(py){ return c.depthEdges[0] + (py - g.R.y)/g.R.h * (c.depthEdges[g.nRows] - c.depthEdges[0]); };
+    var mr = GVCore.cellRange(c.monthEdges, monthVal(x0), monthVal(x1));
+    var pr = GVCore.cellRange(c.depthEdges, depthVal(y0), depthVal(y1));
+    S.boxTD = { p0: pr[0], p1: pr[1], m0: mr[0], m1: mr[1] };
+    recomputeAll();
+  }));
+  var mapCv = document.getElementById('mapCanvas');
+  mapCv.addEventListener('mousedown', attachDrag(function(){return mapGeom;}, function (g, x0, y0, x1, y1) {
+    var c = m();
+    var lonVal = function(px){ return g.lon0 + (px - g.R.x)/g.R.w * (g.lon1 - g.lon0); };
+    var latVal = function(py){ return g.lat0 + (1 - (py - g.R.y)/g.R.h) * (g.lat1 - g.lat0); }; // lat drawn up
+    var xr = GVCore.cellRange(c.lonEdges, lonVal(x0), lonVal(x1));
+    var yr = GVCore.cellRange(c.latEdges, latVal(y0), latVal(y1));
+    S.boxLL = { x0: xr[0], x1: xr[1], y0: yr[0], y1: yr[1] };
+    recomputeAll();
+  }));
+}
+function clampi(v,a,b){ v=Math.round(v); return v<a?a:v>b?b:v; }
+
+// ---------- conditions UI ----------
+function rebuildCondVarOptions() { renderConds(); }
+function renderConds() {
+  var host = document.getElementById('condList'); host.innerHTML = '';
+  S.conditions.forEach(function (c, i) {
+    var row = document.createElement('div'); row.className = 'cond';
+    var vsel = document.createElement('select');
+    S.model.varNames.forEach(function (n){ var o=document.createElement('option'); o.value=n; o.textContent=n; vsel.appendChild(o); });
+    vsel.value = c.varName || S.model.varNames[0]; c.varName = vsel.value;
+    vsel.onchange = function(){ c.varName = vsel.value; applyConds(); };
+    var osel = document.createElement('select');
+    ['>=','<=','>','<','==','between'].forEach(function(op){ var o=document.createElement('option'); o.value=op; o.textContent=op; osel.appendChild(o); });
+    osel.value = c.op || '>='; c.op = osel.value;
+    var v1 = document.createElement('input'); v1.type='number'; v1.step='any'; v1.className='range-in'; v1.value = c.value!=null?c.value:'';
+    var v2 = document.createElement('input'); v2.type='number'; v2.step='any'; v2.className='range-in'; v2.value = c.value2!=null?c.value2:''; v2.placeholder='and';
+    function syncV2(){ v2.style.display = osel.value==='between'?'':'none'; }
+    osel.onchange=function(){ c.op=osel.value; syncV2(); applyConds(); }; syncV2();
+    v1.oninput=function(){ c.value=v1.value; applyConds(); };
+    v2.oninput=function(){ c.value2=v2.value; applyConds(); };
+    var rm = document.createElement('button'); rm.className='x'; rm.textContent='×';
+    rm.onclick=function(){ S.conditions.splice(i,1); renderConds(); applyConds(); };
+    row.appendChild(vsel); row.appendChild(osel); row.appendChild(v1); row.appendChild(v2); row.appendChild(rm);
+    host.appendChild(row);
+  });
+}
+function applyConds(){ recomputeKeep(); recomputeAll(); }
+
+// ---------- wiring ----------
+function setStatus(t){ document.getElementById('status').textContent = t; }
+document.getElementById('exampleSel').onchange = function(e){ loadExample(e.target.value); };
+document.getElementById('fileIn').onchange = function(e){
+  var f = e.target.files[0]; if(!f) return; setStatus('Reading '+f.name+' …');
+  var rd = new FileReader(); rd.onload = function(){ loadModelFromBuffer(rd.result, f.name); }; rd.readAsArrayBuffer(f);
+};
+document.getElementById('varSel').onchange = function(e){ S.varName = e.target.value; recomputeAll(); };
+document.getElementById('cmapSel').onchange = function(e){ S.cmap = e.target.value; draw(); };
+document.getElementById('scaleSeg').onclick = function(e){ if(e.target.tagName!=='BUTTON')return; segSet('scaleSeg',e.target); S.log = e.target.dataset.v==='log'; recomputeAll(); };
+document.getElementById('missSeg').onclick = function(e){ if(e.target.tagName!=='BUTTON')return; segSet('missSeg',e.target); S.strict = e.target.dataset.v==='strict'; recomputeAll(); };
+function segSet(id,btn){ document.querySelectorAll('#'+id+' button').forEach(function(b){b.classList.remove('on');}); btn.classList.add('on'); }
+document.getElementById('autoRange').onchange = function(e){ S.autoRange = e.target.checked;
+  document.getElementById('vmin').disabled = e.target.checked; document.getElementById('vmax').disabled = e.target.checked; recomputeAll(); };
+document.getElementById('vmin').oninput = function(e){ S.vmin = +e.target.value; draw(); };
+document.getElementById('vmax').oninput = function(e){ S.vmax = +e.target.value; draw(); };
+document.getElementById('addCond').onclick = function(){ if(!S.model)return; S.conditions.push({varName:S.model.varNames[0],op:'>=',value:0}); renderConds(); };
+window.addEventListener('resize', function(){ if(S.model) draw(); });
+
+initInteraction();
+loadExample(document.getElementById('exampleSel').value);
+</script>
+</body>
+</html>
