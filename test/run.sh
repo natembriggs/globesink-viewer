@@ -4,6 +4,7 @@
 set -e
 cd "$(dirname "$0")/.."
 python3 tools/make_example_data.py >/dev/null
+python3 tools/make_test_fixture.py
 python3 tools/golden.py
 JSC=/System/Library/Frameworks/JavaScriptCore.framework/Versions/A/Helpers/jsc
 if [ ! -x "$JSC" ]; then

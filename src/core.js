@@ -29,13 +29,37 @@
     return a;
   }
 
-  // midpoint edges from bin centres, extrapolating the two ends
-  function edgesFromCentres(c) {
+  // Reconstruct bin edges from bin centres.
+  //
+  // For a regular grid, edges are simply the midpoints between centres. For an
+  // IRREGULAR grid (e.g. GLOBESINK depth centres 5,30,75,125,… whose true edges
+  // are 0,10,50,100,…), midpoints are wrong — but if each centre is the exact
+  // midpoint of its bin, the edges are recoverable by e[i+1] = 2*c[i] - e[i]
+  // once e[0] is fixed. We seed e[0]=0 (works for ocean depth starting at the
+  // surface) and accept that reconstruction only if it stays monotonic and
+  // non-negative; otherwise we fall back to midpoints. Regular grids give the
+  // same answer either way.
+  function midpointEdges(c) {
     var n = c.length, e = new Float64Array(n + 1);
+    if (n === 1) { e[0] = c[0] - 0.5; e[1] = c[0] + 0.5; return e; }
     for (var i = 1; i < n; i++) e[i] = 0.5 * (c[i - 1] + c[i]);
     e[0] = c[0] - (e[1] - c[0]);
     e[n] = c[n - 1] + (c[n - 1] - e[n - 1]);
     return e;
+  }
+  function edgesFromCentres(c) {
+    var n = c.length;
+    if (n < 2) return midpointEdges(c);
+    // regular? then midpoints are exact
+    var d0 = c[1] - c[0], regular = true;
+    for (var i = 2; i < n; i++) if (Math.abs((c[i] - c[i - 1]) - d0) > 1e-6 * Math.abs(d0)) { regular = false; break; }
+    if (regular) return midpointEdges(c);
+    // irregular: try recursion seeded at 0 (surface), assuming centres are bin midpoints
+    var e = new Float64Array(n + 1);
+    e[0] = 0;
+    var ok = true;
+    for (var j = 0; j < n; j++) { e[j + 1] = 2 * c[j] - e[j]; if (e[j + 1] <= e[j]) { ok = false; break; } }
+    return ok ? e : midpointEdges(c);
   }
 
   function transposeToCanon(flat, srcOrder, sizes) {
@@ -64,16 +88,50 @@
     return out;
   }
 
+  // Determine the stored axis order of a 4-D variable as ['depth'|'lat'|'lon'|
+  // 'month', ...], one entry per axis. MATLAB's nccreate reverses the declared
+  // dimension order on write, and the CF `coordinates` attribute does NOT track
+  // storage order, so neither can be trusted. Instead:
+  //   - month and depth have unique lengths, so size identifies them; and
+  //   - lat and lon share a length, disambiguated via the netCDF-4
+  //     `_Netcdf4Coordinates` (dimension id per axis) + each coordinate's
+  //     `_Netcdf4Dimid`. If that metadata is missing, fall back to size, then
+  //     to a lat-before-lon default.
+  function resolveAxisOrder(shape, attrs, coordInfo, dimidToName) {
+    var coordAttr = attrs._Netcdf4Coordinates;
+    if (coordAttr && !Array.isArray(coordAttr) && !ArrayBuffer.isView(coordAttr)) coordAttr = null;
+    var order = [], used = {};
+    for (var ax = 0; ax < shape.length; ax++) {
+      var chosen = null;
+      if (coordAttr && coordAttr[ax] != null) {
+        var nm = dimidToName[coordAttr[ax]];
+        if (nm && !used[nm]) chosen = nm;
+      }
+      if (!chosen) {
+        var cands = CANON.filter(function (nm) { return coordInfo[nm] && coordInfo[nm].len === shape[ax] && !used[nm]; });
+        if (cands.length) chosen = cands[0];
+      }
+      if (!chosen) return null;
+      used[chosen] = true;
+      order.push(chosen);
+    }
+    // must be a full permutation of the four axes
+    if (order.length !== 4) return null;
+    for (var k = 0; k < CANON.length; k++) if (order.indexOf(CANON[k]) < 0) return null;
+    return order;
+  }
+
   function parseNetCDF(arrayBuffer, filename) {
     var f = new hdf5.File(arrayBuffer, filename || 'file.nc');
     var keys = f.keys.slice();
 
-    // coordinate variables by canonical name
-    var coords = {};
+    // coordinate variables by canonical name, plus their netCDF-4 dimension id
+    var coords = {}, coordInfo = {};
     CANON.forEach(function (nm) {
       if (keys.indexOf(nm) >= 0) {
         var d = f.get(nm);
         coords[nm] = toFloat64(d.value);
+        coordInfo[nm] = { len: coords[nm].length, dimid: scalarAttr((d.attrs || {})._Netcdf4Dimid) };
       }
     });
     ['depth', 'lat', 'lon', 'month'].forEach(function (nm) {
@@ -81,6 +139,8 @@
     });
     var sizes = { depth: coords.depth.length, lat: coords.lat.length,
                   lon: coords.lon.length, month: coords.month.length };
+    var dimidToName = {};
+    CANON.forEach(function (nm) { var id = coordInfo[nm].dimid; if (id != null) dimidToName[id] = nm; });
 
     var vars = {}, varNames = [];
     keys.forEach(function (key) {
@@ -89,10 +149,8 @@
       var shape = d.shape;
       if (!shape || shape.length !== 4) return; // only 4-D fields
       var attrs = d.attrs || {};
-      var order = attrs.coordinates
-        ? String(scalarAttr(attrs.coordinates) || attrs.coordinates).trim().split(/\s+/)
-        : CANON.slice();
-      if (order.length !== 4) order = CANON.slice();
+      var order = resolveAxisOrder(shape, attrs, coordInfo, dimidToName);
+      if (!order) return; // axes don't map onto depth/lat/lon/month — skip
 
       var fill = scalarAttr(attrs._FillValue);
       var miss = scalarAttr(attrs.missing_value);

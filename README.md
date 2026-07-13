@@ -45,13 +45,22 @@ dependency is the vendored pure-JavaScript HDF5 reader in `vendor/`.
 
 ## What files it expects
 
-GLOBESINK NetCDF variables are 4-D, dimensioned **[depth, lat, lon, month]**
-(single precision, with a `_FillValue`) and carry a
-`coordinates = "depth lat lon month"` attribute — which is what the viewer uses
-to identify the axes (latitude and longitude can share a length, so size alone
-can't tell them apart). Coordinate variables must be named `depth`, `lat`,
-`lon`, `month`. Fill values, `missing_value`, and `scale_factor`/`add_offset`
-are handled on read.
+GLOBESINK NetCDF variables are 4-D over `depth`, `lat`, `lon`, `month`
+(single precision, with a `_FillValue`). Coordinate variables must be named
+`depth`, `lat`, `lon`, `month`. Fill values, `missing_value`, and
+`scale_factor`/`add_offset` are handled on read, and every variable is
+normalised internally to `[depth, lat, lon, month]`.
+
+**On axis order:** MATLAB's `nccreate` writes the dimensions in *reversed*
+storage order (`[month, lon, lat, depth]`), and the CF `coordinates` attribute
+does not track storage order — so neither is trusted. The viewer instead
+identifies each axis by matching its length to the coordinate variables
+(`month` and `depth` are unique lengths) and disambiguates the equal-length
+`lat`/`lon` axes using the netCDF-4 dimension-id metadata
+(`_Netcdf4Coordinates` on the variable, `_Netcdf4Dimid` on the coordinates).
+Bin **edges** are reconstructed from the (possibly irregular) bin **centres**:
+GLOBESINK depth centres `5, 30, 75, 125, …` correctly yield edges
+`0, 10, 50, 100, …`.
 
 The files are **NetCDF-4 (HDF5-backed)**, so the viewer reads them with
 [jsfive](https://github.com/usnistgov/jsfive) (pure JS, bundled in `vendor/`).

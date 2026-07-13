@@ -6,6 +6,7 @@
  *
  * Run via test/run.sh (after the numeric core test).
  */
+if (typeof console === 'undefined') globalThis.console = { log: function () {}, warn: function () {}, error: function () {} };
 if (typeof TextDecoder === 'undefined') {
   globalThis.TextDecoder = function () {};
   globalThis.TextDecoder.prototype.decode = function (buf) {
