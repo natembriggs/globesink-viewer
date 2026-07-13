@@ -28,6 +28,8 @@ selection stays on each panel as a thin magenta rectangle.
   between two values). Multiple conditions are combined with AND.
 - **Colour controls:** several colormaps and manual or automatic (robust
   2–98th percentile) colour limits.
+- **Land overlay:** a 50 m coastline (islands down to ~Kerguelen) is drawn over
+  the map, masking the data under land.
 
 ## Running it
 
@@ -107,13 +109,21 @@ against `numpy`/`xarray` values to ~1e-6, and (2) runs the full `index.html`
 wiring against a stubbed DOM/Canvas to catch runtime errors. Rendering itself
 (pixels, drag interactions) is verified in a real browser.
 
+## Coastline data
+
+The land overlay is `vendor/land_50m.json`, derived from
+[Natural Earth](https://www.naturalearthdata.com/) 50 m land (public domain).
+Regenerate it with `python3 tools/make_coastline.py <ne_50m_land.geojson>`
+(source not vendored). It is drawn as filled polygons over the map, so it also
+hides data under land; the numeric averages still include those cells (which
+are normally missing over land in the ocean product anyway).
+
 ## Notes / possible additions
 
-- No coastline overlay yet: on real GLOBESINK data, land shows through as
-  missing (grey) cells, which gives geographic context; a proper coastline
-  polyline could be added.
 - Large interpolated grids are read on the main thread; if that ever feels
   slow, parsing could move to a Web Worker.
+- The land overlay masks the map visually; excluding land cells from the
+  section/box averages too would require rasterising the coastline to the grid.
 
 ## License
 

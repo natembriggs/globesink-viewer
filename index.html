@@ -93,6 +93,9 @@
 "use strict";
 var MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 var MISSING_COLOR = [228,230,233];
+var LAND_FILL = '#d3d7dd', LAND_STROKE = '#6b7178';
+var LAND = null;            // array of polygons; polygon = array of rings (flat [lon,lat,...])
+var _landCache = { key: '', paths: null };
 
 // ---- colormaps (control stops, 0..255) ----
 var CMAPS = {
@@ -194,8 +197,11 @@ function norm(v) {
 
 function updateTitles() {
   var c = S.model.coords;
-  var la0 = c.lat[S.boxLL.y0], la1 = c.lat[S.boxLL.y1], lo0 = c.lon[S.boxLL.x0], lo1 = c.lon[S.boxLL.x1];
-  var latLo = Math.min(la0,la1), latHi = Math.max(la0,la1), lonLo = Math.min(lo0,lo1), lonHi = Math.max(lo0,lo1);
+  // report the OUTER edges of the selected lat/lon box, not the bin centres
+  var latLo = Math.min(c.latEdges[S.boxLL.y0], c.latEdges[S.boxLL.y1 + 1]);
+  var latHi = Math.max(c.latEdges[S.boxLL.y0], c.latEdges[S.boxLL.y1 + 1]);
+  var lonLo = Math.min(c.lonEdges[S.boxLL.x0], c.lonEdges[S.boxLL.x1 + 1]);
+  var lonHi = Math.max(c.lonEdges[S.boxLL.x0], c.lonEdges[S.boxLL.x1 + 1]);
   document.getElementById('secTitle').textContent =
     'lat ' + fmtLat(latLo) + '–' + fmtLat(latHi) + ',  lon ' + fmtLon(lonLo) + '–' + fmtLon(lonHi);
   var de0 = c.depthEdges[S.boxTD.p0], de1 = c.depthEdges[S.boxTD.p1 + 1];
@@ -254,12 +260,51 @@ function drawColorbar(ctx, cssW, R, label) {
   ctx.fillText(label, 0, 0); ctx.restore();
 }
 
+// Load the 50 m coastline once; redraw when it arrives.
+function loadLand() {
+  fetch('vendor/land_50m.json').then(function (r) { return r.ok ? r.json() : null; }).then(function (polys) {
+    if (!polys) return;
+    LAND = polys.map(function (poly) { return poly.map(function (ring) { return Float32Array.from(ring); }); });
+    _landCache.key = '';
+    if (S.model) draw();
+  }).catch(function () { /* land overlay is optional */ });
+}
+
+// Filled land polygons (opaque, so they hide the data beneath) with coastline
+// outlines, projected the same way as the data grid. Cached per geometry so
+// dragging stays smooth. Holes (inland water) are cut out via even-odd fill.
+function drawLand(ctx, R, lon0, lon1, lat0, lat1) {
+  if (!LAND) return;
+  var key = [R.x, R.y, R.w, R.h, lon0, lon1, lat0, lat1].join(',');
+  if (_landCache.key !== key) {
+    var sx = R.w / (lon1 - lon0), sy = R.h / (lat1 - lat0), paths = [];
+    for (var pi = 0; pi < LAND.length; pi++) {
+      var poly = LAND[pi], path = new Path2D();
+      for (var ri = 0; ri < poly.length; ri++) {
+        var ring = poly[ri];
+        for (var k = 0; k < ring.length; k += 2) {
+          var px = R.x + (ring[k] - lon0) * sx, py = R.y + R.h - (ring[k + 1] - lat0) * sy;
+          if (k === 0) path.moveTo(px, py); else path.lineTo(px, py);
+        }
+        path.closePath();
+      }
+      paths.push(path);
+    }
+    _landCache = { key: key, paths: paths };
+  }
+  ctx.save();
+  ctx.beginPath(); ctx.rect(R.x, R.y, R.w, R.h); ctx.clip();
+  ctx.fillStyle = LAND_FILL; ctx.strokeStyle = LAND_STROKE; ctx.lineWidth = 0.6; ctx.lineJoin = 'round';
+  var ps = _landCache.paths;
+  for (var i = 0; i < ps.length; i++) { ctx.fill(ps[i], 'evenodd'); ctx.stroke(ps[i]); }
+  ctx.restore();
+}
+
 function selRect(ctx, x0, y0, x1, y1) {
   ctx.save();
   ctx.strokeStyle = 'rgba(192,38,211,0.95)'; ctx.lineWidth = 1.5;
-  ctx.fillStyle = 'rgba(192,38,211,0.06)';
   var x = Math.min(x0,x1), y = Math.min(y0,y1), w = Math.abs(x1-x0), h = Math.abs(y1-y0);
-  ctx.fillRect(x, y, w, h); ctx.strokeRect(x + .5, y + .5, w, h);
+  ctx.strokeRect(x + .5, y + .5, w, h);
   ctx.restore();
 }
 
@@ -303,6 +348,7 @@ function drawMap() {
   var yEdgePix = function (r) { return R.y + (1 - (latE[r] - lat0) / (lat1 - lat0)) * R.h; }; // lat up
   ctx.clearRect(0,0,cssW,cssH);
   drawCells(ctx, R, nX, nY, xEdgePix, yEdgePix, function (r, c) { return S.mapArr[r * nX + c]; });
+  drawLand(ctx, R, lon0, lon1, lat0, lat1);
   frame(ctx, R);
   axisStyle(ctx); ctx.textAlign='center'; ctx.textBaseline='top';
   [-180,-120,-60,0,60,120,180].forEach(function(lv){ if(lv>=Math.min(lon0,lon1)&&lv<=Math.max(lon0,lon1)){ var xx=R.x+((lv-lon0)/(lon1-lon0))*R.w; ctx.beginPath();ctx.moveTo(xx,R.y+R.h);ctx.lineTo(xx,R.y+R.h+3);ctx.stroke(); ctx.fillText(lv, xx, R.y+R.h+5);} });
@@ -415,6 +461,7 @@ document.getElementById('addCond').onclick = function(){ if(!S.model)return; S.c
 window.addEventListener('resize', function(){ if(S.model) draw(); });
 
 initInteraction();
+loadLand();
 loadExample(document.getElementById('exampleSel').value);
 </script>
 </body>

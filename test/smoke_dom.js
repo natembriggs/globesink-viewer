@@ -25,10 +25,12 @@ function ctxStub() {
   var noop = function () {};
   return { setTransform: noop, clearRect: noop, fillRect: noop, strokeRect: noop,
     beginPath: noop, moveTo: noop, lineTo: noop, stroke: noop, fill: noop, fillText: noop,
+    rect: noop, clip: noop, closePath: noop,
     save: noop, restore: noop, translate: noop, rotate: noop, scale: noop,
     createLinearGradient: function () { return { addColorStop: noop }; },
-    fillStyle: '', strokeStyle: '', font: '', lineWidth: 1, textAlign: '', textBaseline: '' };
+    fillStyle: '', strokeStyle: '', font: '', lineWidth: 1, lineJoin: '', textAlign: '', textBaseline: '' };
 }
+globalThis.Path2D = function () { this.moveTo = function () {}; this.lineTo = function () {}; this.closePath = function () {}; };
 function elStub(id) {
   var e = { id: id, value: '', innerHTML: '', textContent: '', checked: false, disabled: false,
     style: {}, dataset: {}, files: [],
@@ -61,7 +63,9 @@ function syncResolved(val) {
 globalThis.fetch = function (url) {
   var bytes = readFile(url, 'binary');
   var ab = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
-  return syncResolved({ ok: true, status: 200, arrayBuffer: function () { return syncResolved(ab); } });
+  return syncResolved({ ok: true, status: 200,
+    arrayBuffer: function () { return syncResolved(ab); },
+    json: function () { return syncResolved(JSON.parse(readFile(url))); } });
 };
 
 load('vendor/hdf5.js');
@@ -76,7 +80,7 @@ try {
   // a real browser auto-selects the first <option>; our stub doesn't, so preset it
   document.getElementById('exampleSel').value = 'example_data/globesink_example.nc';
   // strict-mode eval keeps declarations local, so expose what we need to assert on
-  eval(m[1] + '\n;globalThis.__gv = { S: S, recomputeAll: recomputeAll, recomputeKeep: recomputeKeep };');
+  eval(m[1] + '\n;globalThis.__gv = { S: S, recomputeAll: recomputeAll, recomputeKeep: recomputeKeep, landLoaded: function(){ return LAND != null; } };');
   var G = globalThis.__gv, S = G.S;
   var recomputeAll = G.recomputeAll, recomputeKeep = G.recomputeKeep;
 
@@ -100,6 +104,7 @@ try {
   // simulate a section drag -> should set boxTD and redraw without error
   S.boxTD = { p0: 0, p1: 2, m0: 3, m1: 7 }; recomputeAll();
   chk('map after box ok', S.mapArr.length === S.model.sizes.lat * S.model.sizes.lon);
+  chk('land overlay loaded + drawn', G.landLoaded && G.landLoaded());
 } catch (e) {
   print('FAIL runtime: ' + e + (e.stack ? '\n' + e.stack : ''));
   fail++;
