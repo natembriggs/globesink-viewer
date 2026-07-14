@@ -39,7 +39,8 @@ function elStub(id) {
     getContext: function () { return e._ctx || (e._ctx = ctxStub()); },
     getBoundingClientRect: function () { return { left: 0, top: 0, width: 500, height: 360 }; },
     querySelectorAll: function () { return { forEach: function () {} }; } };
-  e.parentElement = { clientWidth: 520 };
+  e.parentElement = { clientWidth: 520, addEventListener: function () {},
+    classList: { add: function () {}, remove: function () {}, toggle: function () {} } };
   e.width = 500; e.height = 360;
   return e;
 }
@@ -110,6 +111,11 @@ try {
   chk('wrapped month -> 2 runs', GVCore.runsFromIdx(S.boxTD.m).length === 2);
   chk('map after wrapped box ok', S.mapArr.length === S.model.sizes.lat * S.model.sizes.lon);
   chk('land overlay loaded + drawn', G.landLoaded && G.landLoaded());
+  // linked vs unlinked colour scales
+  S.linkScales = true; recomputeAll();
+  chk('linked: secLim == mapLim', S.secLim[0] === S.mapLim[0] && S.secLim[1] === S.mapLim[1]);
+  S.linkScales = false; recomputeAll();
+  chk('unlinked: both limits finite', isFinite(S.secLim[0]) && isFinite(S.secLim[1]) && isFinite(S.mapLim[0]) && isFinite(S.mapLim[1]));
 } catch (e) {
   print('FAIL runtime: ' + e + (e.stack ? '\n' + e.stack : ''));
   fail++;

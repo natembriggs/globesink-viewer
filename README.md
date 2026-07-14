@@ -27,7 +27,13 @@ selection stays on each panel as a thin magenta rectangle.
   variables (e.g. keep only cells where `n_profiles >= 5`, or `POC_flux` is
   between two values). Multiple conditions are combined with AND.
 - **Colour controls:** several colormaps and manual or automatic (robust
-  2–98th percentile) colour limits.
+  2–98th percentile) colour limits. With auto on, **link L/R** shares one scale
+  across both panels or lets each auto-scale independently (so a deep,
+  low-signal map isn't swamped by high surface values in the section).
+- **Keyboard navigation:** click a plot to focus it (magenta border), then arrow
+  keys shift its selection one cell at a time — left/right wrap (month on the
+  section, longitude on the map), up/down clamp (depth, latitude). A wrapped
+  selection is drawn as two boxes.
 - **Land overlay:** a 50 m coastline (islands down to ~Kerguelen) is drawn over
   the map, masking the data under land.
 
