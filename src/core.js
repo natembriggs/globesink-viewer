@@ -229,20 +229,51 @@
   // strict=false -> NaN cells are ignored ("ignore missing"); NaN if none finite.
   // Reducers below inline this logic for speed but follow the same contract.
 
-  // Left panel: value(depth, month) averaged over a lat/lon box.
-  // yRange/xRange are inclusive index ranges [i0,i1].
-  function sectionReduce(model, varName, keep, strict, yRange, xRange) {
+  // Selection sets are explicit arrays of cell indices (not [lo,hi] ranges), so
+  // a wrapped selection like months {10,11,0} is representable and averages
+  // correctly. Helpers below build and shift these sets.
+  function idxRange(lo, hi) { var o = []; for (var i = lo; i <= hi; i++) o.push(i); return o; }
+
+  // Rigidly shift a selection by delta with wrap-around (for month / lon).
+  function shiftWrap(idx, delta, N) {
+    var o = idx.map(function (i) { return ((i + delta) % N + N) % N; });
+    o.sort(function (a, b) { return a - b; });
+    var u = []; for (var k = 0; k < o.length; k++) if (k === 0 || o[k] !== o[k - 1]) u.push(o[k]);
+    return u;
+  }
+  // Rigidly shift with clamping (for depth / lat): if the shift would push any
+  // cell past an edge, don't move — the box keeps its shape and stops.
+  function shiftClamp(idx, delta, N) {
+    var mn = Math.min.apply(null, idx), mx = Math.max.apply(null, idx);
+    if (mn + delta < 0 || mx + delta > N - 1) return idx.slice();
+    return idx.map(function (i) { return i + delta; });
+  }
+  // Decompose a selection set into contiguous [lo,hi] runs (for drawing boxes).
+  function runsFromIdx(idx) {
+    if (!idx.length) return [];
+    var s = idx.slice().sort(function (a, b) { return a - b; });
+    var runs = [], lo = s[0], prev = s[0];
+    for (var i = 1; i < s.length; i++) {
+      if (s[i] === prev + 1) prev = s[i];
+      else { runs.push([lo, prev]); lo = s[i]; prev = s[i]; }
+    }
+    runs.push([lo, prev]);
+    return runs;
+  }
+
+  // Left panel: value(depth, month) averaged over a set of lat/lon cells.
+  // yIdx / xIdx are arrays of cell indices.
+  function sectionReduce(model, varName, keep, strict, yIdx, xIdx) {
     var s = model.sizes, nP = s.depth, nY = s.lat, nX = s.lon, nM = s.month;
     var d = model.vars[varName].data;
-    var y0 = Math.max(0, yRange[0]), y1 = Math.min(nY - 1, yRange[1]);
-    var x0 = Math.max(0, xRange[0]), x1 = Math.min(nX - 1, xRange[1]);
     var out = new Float32Array(nP * nM);
     for (var p = 0; p < nP; p++) {
       for (var m = 0; m < nM; m++) {
         var sum = 0, cnt = 0, sawNaN = false;
-        for (var y = y0; y <= y1; y++) {
-          for (var x = x0; x <= x1; x++) {
-            var idx = ((p * nY + y) * nX + x) * nM + m;
+        for (var yi = 0; yi < yIdx.length; yi++) {
+          var y = yIdx[yi];
+          for (var xi = 0; xi < xIdx.length; xi++) {
+            var idx = ((p * nY + y) * nX + xIdx[xi]) * nM + m;
             if (keep && !keep[idx]) continue;
             var v = d[idx];
             if (isNaN(v)) { sawNaN = true; continue; }
@@ -255,19 +286,18 @@
     return out; // indexed [p*nM + m]
   }
 
-  // Right panel: value(lat, lon) averaged over a month/depth box.
-  function mapReduce(model, varName, keep, strict, pRange, mRange) {
+  // Right panel: value(lat, lon) averaged over a set of depth/month cells.
+  function mapReduce(model, varName, keep, strict, pIdx, mIdx) {
     var s = model.sizes, nP = s.depth, nY = s.lat, nX = s.lon, nM = s.month;
     var d = model.vars[varName].data;
-    var p0 = Math.max(0, pRange[0]), p1 = Math.min(nP - 1, pRange[1]);
-    var m0 = Math.max(0, mRange[0]), m1 = Math.min(nM - 1, mRange[1]);
     var out = new Float32Array(nY * nX);
     for (var y = 0; y < nY; y++) {
       for (var x = 0; x < nX; x++) {
         var sum = 0, cnt = 0, sawNaN = false;
-        for (var p = p0; p <= p1; p++) {
-          for (var m = m0; m <= m1; m++) {
-            var idx = ((p * nY + y) * nX + x) * nM + m;
+        for (var pi = 0; pi < pIdx.length; pi++) {
+          var base = (pIdx[pi] * nY + y) * nX + x;
+          for (var mi = 0; mi < mIdx.length; mi++) {
+            var idx = base * nM + mIdx[mi];
             if (keep && !keep[idx]) continue;
             var v = d[idx];
             if (isNaN(v)) { sawNaN = true; continue; }
@@ -326,6 +356,10 @@
     edgesFromCentres: edgesFromCentres,
     cellIndexForValue: cellIndexForValue,
     cellRange: cellRange,
+    idxRange: idxRange,
+    shiftWrap: shiftWrap,
+    shiftClamp: shiftClamp,
+    runsFromIdx: runsFromIdx,
     CANON: CANON
   };
   root.GVCore = api;

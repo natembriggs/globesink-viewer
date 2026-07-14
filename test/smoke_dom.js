@@ -91,8 +91,8 @@ try {
   chk('default varName set', !!S.varName);
   chk('section array sized nP*nM', S.secArr && S.secArr.length === S.model.sizes.depth * S.model.sizes.month);
   chk('map array sized nY*nX', S.mapArr && S.mapArr.length === S.model.sizes.lat * S.model.sizes.lon);
-  chk('boxTD default depth bin 1', S.boxTD.p0 === 1 && S.boxTD.p1 === 1);
-  chk('boxTD default annual', S.boxTD.m0 === 0 && S.boxTD.m1 === S.model.sizes.month - 1);
+  chk('boxTD default depth bin 1', S.boxTD.p.length === 1 && S.boxTD.p[0] === 1);
+  chk('boxTD default annual', S.boxTD.m.length === S.model.sizes.month && S.boxTD.m[0] === 0);
   chk('vmax > vmin (autorange)', S.vmax > S.vmin);
   chk('varSel option count', document.getElementById('varSel')._optCount === undefined || true);
 
@@ -102,8 +102,13 @@ try {
   S.conditions = [{ varName: 'n_profiles', op: '>=', value: 40 }]; recomputeKeep(); recomputeAll();
   chk('conditioned recompute ok', S.keep != null && S.secArr.length > 0);
   // simulate a section drag -> should set boxTD and redraw without error
-  S.boxTD = { p0: 0, p1: 2, m0: 3, m1: 7 }; recomputeAll();
+  S.boxTD = { p: GVCore.idxRange(0, 2), m: GVCore.idxRange(3, 7) }; recomputeAll();
   chk('map after box ok', S.mapArr.length === S.model.sizes.lat * S.model.sizes.lon);
+  // a WRAPPED month selection (Oct-Dec shifted right -> Nov,Dec,Jan) must draw
+  // + reduce without error and read as two runs
+  S.boxTD.m = GVCore.shiftWrap(GVCore.idxRange(9, 11), 1, S.model.sizes.month); recomputeAll();
+  chk('wrapped month -> 2 runs', GVCore.runsFromIdx(S.boxTD.m).length === 2);
+  chk('map after wrapped box ok', S.mapArr.length === S.model.sizes.lat * S.model.sizes.lon);
   chk('land overlay loaded + drawn', G.landLoaded && G.landLoaded());
 } catch (e) {
   print('FAIL runtime: ' + e + (e.stack ? '\n' + e.stack : ''));
