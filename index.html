@@ -35,13 +35,7 @@
 <header>
   <div class="grp">
     <label>Dataset</label>
-    <div style="display:flex;gap:6px">
-      <select id="exampleSel">
-        <option value="example_data/globesink_example.nc">example: raw 4°×8°</option>
-        <option value="example_data/globesink_example_interpolated.nc">example: interpolated 2°×2°</option>
-      </select>
-      <input type="file" id="fileIn" accept=".nc">
-    </div>
+    <input type="file" id="fileIn" accept=".nc">
   </div>
   <div class="grp"><label>Variable</label><select id="varSel"></select></div>
   <div class="grp"><label>Colormap</label>
@@ -87,7 +81,7 @@
   </div>
 </div>
 
-<div id="status">Loading example dataset…</div>
+<div id="status">No file loaded — choose a NetCDF (.nc) file to begin.</div>
 
 <script src="vendor/hdf5.js"></script>
 <script src="src/core.js"></script>
@@ -158,14 +152,6 @@ function loadModelFromBuffer(ab, name) {
     setStatus('Failed to read ' + name + ': ' + e.message);
     throw e;
   }
-}
-function loadExample(url) {
-  setStatus('Loading ' + url + ' …');
-  fetch(url).then(function (r) {
-    if (!r.ok) throw new Error('HTTP ' + r.status + ' (serve the folder over http, see README)');
-    return r.arrayBuffer();
-  }).then(function (ab) { loadModelFromBuffer(ab, url.split('/').pop()); })
-    .catch(function (e) { setStatus('Could not fetch ' + url + ': ' + e.message); });
 }
 
 // ---------- compute ----------
@@ -392,7 +378,22 @@ function drawMap() {
   mapGeom = { R:R, cv:cv, nCols:nX, nRows:nY, lonE:lonE, latE:latE, lon0:lon0, lon1:lon1, lat0:lat0, lat1:lat1 };
 }
 function varLabel(){ var v=S.model.vars[S.varName]; return v.name + (v.units?' ('+v.units+')':'') + (S.log?' [log]':''); }
-function draw(){ if(!S.model) return; drawSection(); drawMap(); }
+function draw(){ if(!S.model){ drawEmpty(); return; } drawSection(); drawMap(); }
+
+// Blank placeholder shown before any file is loaded.
+function drawEmpty() {
+  document.getElementById('secTitle').textContent = '';
+  document.getElementById('mapTitle').textContent = '';
+  [['secCanvas', 0.72], ['mapCanvas', 0.62]].forEach(function (pair) {
+    var cv = document.getElementById(pair[0]);
+    var cssW = cv.parentElement.clientWidth, cssH = Math.max(300, Math.round(cssW * pair[1]));
+    var ctx = setupCanvas(cv, cssW, cssH);
+    ctx.clearRect(0, 0, cssW, cssH);
+    ctx.fillStyle = '#f2f3f5'; ctx.fillRect(0, 0, cssW, cssH);
+    ctx.fillStyle = '#9aa0a8'; ctx.font = '14px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText('No data — choose a NetCDF (.nc) file above', cssW / 2, cssH / 2);
+  });
+}
 
 // ---------- interaction ----------
 function attachDrag(getGeom, onBox) {
@@ -512,7 +513,6 @@ function applyConds(){ recomputeKeep(); recomputeAll(); }
 
 // ---------- wiring ----------
 function setStatus(t){ document.getElementById('status').textContent = t; }
-document.getElementById('exampleSel').onchange = function(e){ loadExample(e.target.value); };
 document.getElementById('fileIn').onchange = function(e){
   var f = e.target.files[0]; if(!f) return; setStatus('Reading '+f.name+' …');
   var rd = new FileReader(); rd.onload = function(){ loadModelFromBuffer(rd.result, f.name); }; rd.readAsArrayBuffer(f);
@@ -529,11 +529,11 @@ document.getElementById('linkScales').onchange = function(e){ S.linkScales = e.t
 document.getElementById('vmin').oninput = function(e){ S.vmin = +e.target.value; S.secLim = [S.vmin, S.vmax]; S.mapLim = [S.vmin, S.vmax]; draw(); };
 document.getElementById('vmax').oninput = function(e){ S.vmax = +e.target.value; S.secLim = [S.vmin, S.vmax]; S.mapLim = [S.vmin, S.vmax]; draw(); };
 document.getElementById('addCond').onclick = function(){ if(!S.model)return; S.conditions.push({varName:S.model.varNames[0],op:'>=',value:0}); renderConds(); };
-window.addEventListener('resize', function(){ if(S.model) draw(); });
+window.addEventListener('resize', function(){ draw(); });
 
 initInteraction();
 loadLand();
-loadExample(document.getElementById('exampleSel').value);
+draw();  // blank placeholder until a file is chosen
 </script>
 </body>
 </html>

@@ -78,12 +78,13 @@ try {
   var html = readFile('index.html');
   var m = html.match(/<script>([\s\S]*?)<\/script>\s*<\/body>/);
   if (!m) throw new Error('could not extract inline script');
-  // a real browser auto-selects the first <option>; our stub doesn't, so preset it
-  document.getElementById('exampleSel').value = 'example_data/globesink_example.nc';
   // strict-mode eval keeps declarations local, so expose what we need to assert on
-  eval(m[1] + '\n;globalThis.__gv = { S: S, recomputeAll: recomputeAll, recomputeKeep: recomputeKeep, landLoaded: function(){ return LAND != null; } };');
+  eval(m[1] + '\n;globalThis.__gv = { S: S, recomputeAll: recomputeAll, recomputeKeep: recomputeKeep, loadModelFromBuffer: loadModelFromBuffer, landLoaded: function(){ return LAND != null; } };');
   var G = globalThis.__gv, S = G.S;
   var recomputeAll = G.recomputeAll, recomputeKeep = G.recomputeKeep;
+  // the app now starts blank; drive the file-load path directly
+  var fb0 = readFile('example_data/globesink_example.nc', 'binary');
+  G.loadModelFromBuffer(fb0.buffer.slice(fb0.byteOffset, fb0.byteOffset + fb0.byteLength), 'globesink_example.nc');
 
   // assertions on resulting state
   function chk(name, cond) { if (cond) print('ok   ' + name); else { print('FAIL ' + name); fail++; } }

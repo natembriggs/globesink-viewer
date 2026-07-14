@@ -16,8 +16,8 @@ selection stays on each panel as a thin magenta rectangle.
 
 ## Features
 
-- **Open any GLOBESINK NetCDF-4 file** — pick a bundled example, or *Load file…*
-  to read one from disk (e.g. the raw product or the `_interpolated.nc` version).
+- **Open any GLOBESINK NetCDF-4 file** from disk (e.g. the raw product or the
+  `_interpolated.nc` version). The app starts blank until you choose a file.
 - **Pick the variable** to visualise from a dropdown.
 - **Linked box-averaging** across the two panels (see above).
 - **Log / linear** colour scale.
@@ -39,8 +39,7 @@ selection stays on each panel as a thin magenta rectangle.
 
 ## Running it
 
-Because it reads local files, serve the folder over http (a `file://` page
-can't `fetch` the bundled examples, though *Load file…* still works):
+Serve the folder over http, then open it and choose a `.nc` file:
 
 ```sh
 cd globesink-viewer
@@ -49,7 +48,10 @@ python3 -m http.server 8000
 ```
 
 That's the whole install — there is no build step and no npm. The only
-dependency is the vendored pure-JavaScript HDF5 reader in `vendor/`.
+dependency is the vendored pure-JavaScript HDF5 reader in `vendor/`. (Opening
+`index.html` directly as a `file://` page mostly works too, but the coastline
+overlay is fetched at run time and browsers block that over `file://`, so http
+is recommended.)
 
 ## What files it expects
 
@@ -77,7 +79,8 @@ No internet connection is needed at run time.
 ## Example data
 
 `example_data/` holds two **synthetic** files (not real GLOBESINK output) with
-the correct structure, so the dashboard works out of the box:
+the correct structure, used by the test suite. You can also load them via the
+file picker to try the dashboard without real data:
 
 - `globesink_example.nc` — raw 4°×8° grid.
 - `globesink_example_interpolated.nc` — finer 2°×2° grid.
