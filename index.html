@@ -35,13 +35,17 @@
 <header>
   <div class="grp">
     <label>Dataset</label>
-    <div style="display:flex;gap:6px;align-items:center">
+    <div style="display:flex;gap:8px;align-items:center">
       <select id="datasetSel">
-        <option value="data/GLOBESINK_monthly_climatologies_smoothed_interpolated_minimal.nc">Smoothed climatology (published)</option>
-        <option value="data/GLOBESINK_monthly_climatologies_minimal.nc">Raw climatology (published)</option>
+        <optgroup label="Built-in — core variables only">
+          <option value="data/GLOBESINK_monthly_climatologies_smoothed_interpolated_minimal.nc">Smoothed climatology</option>
+          <option value="data/GLOBESINK_monthly_climatologies_minimal.nc">Raw climatology</option>
+        </optgroup>
       </select>
-      <input type="file" id="fileIn" accept=".nc" title="…or load your own NetCDF file">
+      <span class="hint">or</span>
+      <input type="file" id="fileIn" accept=".nc">
     </div>
+    <div class="hint">Built-in files have 8 core variables — load your own NetCDF for the full set.</div>
   </div>
   <div class="grp"><label>Variable</label><select id="varSel"></select></div>
   <div class="grp"><label>Colormap</label>
@@ -138,15 +142,16 @@ function loadModelFromBuffer(ab, name) {
     var model = GVCore.parseNetCDF(ab, name);
     S.model = model;
     if (!model.varNames.length) { setStatus('No 4-D variables found in ' + name); return; }
-    // variable dropdown
+    // variable dropdown — alphabetical (case-insensitive)
+    var sortedNames = model.varNames.slice().sort(function (a, b) { return a.toLowerCase().localeCompare(b.toLowerCase()); });
     var vs = document.getElementById('varSel');
     vs.innerHTML = '';
-    model.varNames.forEach(function (n) {
+    sortedNames.forEach(function (n) {
       var o = document.createElement('option'); o.value = n;
       o.textContent = n + (model.vars[n].units ? '  ('+model.vars[n].units+')' : '');
       vs.appendChild(o);
     });
-    S.varName = model.varNames.indexOf('CHLA_ADJUSTED_baseline') >= 0 ? 'CHLA_ADJUSTED_baseline' : model.varNames[0];
+    S.varName = model.varNames.indexOf('flux_POC') >= 0 ? 'flux_POC' : sortedNames[0];
     vs.value = S.varName;
     // defaults: section = whole globe; map = annual, depth bin index 1 (10-50 m)
     S.boxLL = { y: GVCore.idxRange(0, model.sizes.lat - 1), x: GVCore.idxRange(0, model.sizes.lon - 1) };
@@ -532,12 +537,17 @@ function loadPublished(url){
     .then(function(ab){ loadModelFromBuffer(ab, url.split('/').pop()); })
     .catch(function(e){ setStatus('Could not load ' + url + ': ' + e.message); drawEmpty(); });
 }
-// Reflect a user-loaded file in the dropdown so it's clear it's active.
+// Reflect a user-loaded file in the dropdown (under its own group) so it's
+// clear which dataset is active.
 function markCustom(name){
   var sel = document.getElementById('datasetSel');
-  var opt = document.getElementById('datasetCustomOpt');
-  if(!opt){ opt = document.createElement('option'); opt.id = 'datasetCustomOpt'; opt.value = '__custom__'; sel.appendChild(opt); }
-  opt.textContent = 'Your file: ' + name;
+  var grp = document.getElementById('datasetCustomGrp');
+  if(!grp){
+    grp = document.createElement('optgroup'); grp.id = 'datasetCustomGrp'; grp.label = 'Your file';
+    var opt = document.createElement('option'); opt.value = '__custom__'; grp.appendChild(opt);
+    sel.appendChild(grp);
+  }
+  grp.firstChild.textContent = name;
   sel.value = '__custom__';
 }
 document.getElementById('datasetSel').onchange = function(e){
