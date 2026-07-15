@@ -40,6 +40,8 @@
   <div class="grp"><label>Variable</label><select id="varSel"></select></div>
   <div class="grp"><label>Colormap</label>
     <select id="cmapSel">
+      <option value="reds">Reds</option>
+      <option value="blues">Blues</option>
       <option value="greens">Greens</option>
       <option value="viridis">Viridis</option>
       <option value="thermal">Thermal</option>
@@ -95,6 +97,8 @@ var _landCache = { key: '', paths: null };
 
 // ---- colormaps (control stops, 0..255) ----
 var CMAPS = {
+  reds:   [[255,245,240],[252,187,161],[251,106,74],[203,24,29],[103,0,13]],
+  blues:  [[247,251,255],[198,219,239],[107,174,214],[33,113,181],[8,48,107]],
   greens: [[247,252,245],[199,233,192],[116,196,118],[35,139,69],[0,68,27]],
   viridis:[[68,1,84],[65,68,135],[42,120,142],[34,168,132],[122,209,81],[253,231,37]],
   thermal:[[4,35,51],[59,28,108],[123,32,110],[181,54,86],[224,96,54],[248,157,54],[251,225,140]],
@@ -109,7 +113,7 @@ function ramp(stops, t) {
 
 // ---- app state ----
 var S = {
-  model: null, varName: null, cmap: 'greens', log: false, strict: false,
+  model: null, varName: null, cmap: 'reds', log: false, strict: false,
   autoRange: true, linkScales: true, vmin: 0, vmax: 1,
   secLim: [0, 1], mapLim: [0, 1],  // per-panel colour limits [min,max]
   boxLL: null,  // {y:[...], x:[...]} lat/lon cell indices -> drives section; drawn on map
