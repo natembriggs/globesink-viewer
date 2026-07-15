@@ -16,8 +16,10 @@ selection stays on each panel as a thin magenta rectangle.
 
 ## Features
 
-- **Open any GLOBESINK NetCDF-4 file** from disk (e.g. the raw product or the
-  `_interpolated.nc` version). The app starts blank until you choose a file.
+- **Built-in published datasets** (in `data/`): the dashboard opens on the
+  smoothed climatology by default and offers a dropdown to switch to the raw
+  climatology — both fetched directly from the site, no download step. You can
+  also **load your own NetCDF-4 file** from disk with the file picker.
 - **Pick the variable** to visualise from a dropdown.
 - **Linked box-averaging** across the two panels (see above).
 - **Log / linear** colour scale.
@@ -39,7 +41,8 @@ selection stays on each panel as a thin magenta rectangle.
 
 ## Running it
 
-Serve the folder over http, then open it and choose a `.nc` file:
+Serve the folder over http, then open it — the smoothed climatology loads
+automatically:
 
 ```sh
 cd globesink-viewer

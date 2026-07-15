@@ -79,7 +79,7 @@ try {
   var m = html.match(/<script>([\s\S]*?)<\/script>\s*<\/body>/);
   if (!m) throw new Error('could not extract inline script');
   // strict-mode eval keeps declarations local, so expose what we need to assert on
-  eval(m[1] + '\n;globalThis.__gv = { S: S, recomputeAll: recomputeAll, recomputeKeep: recomputeKeep, loadModelFromBuffer: loadModelFromBuffer, landLoaded: function(){ return LAND != null; } };');
+  eval(m[1] + '\n;globalThis.__gv = { S: S, recomputeAll: recomputeAll, recomputeKeep: recomputeKeep, loadModelFromBuffer: loadModelFromBuffer, loadPublished: loadPublished, landLoaded: function(){ return LAND != null; } };');
   var G = globalThis.__gv, S = G.S;
   var recomputeAll = G.recomputeAll, recomputeKeep = G.recomputeKeep;
   // the app now starts blank; drive the file-load path directly
@@ -112,6 +112,12 @@ try {
   chk('wrapped month -> 2 runs', GVCore.runsFromIdx(S.boxTD.m).length === 2);
   chk('map after wrapped box ok', S.mapArr.length === S.model.sizes.lat * S.model.sizes.lon);
   chk('land overlay loaded + drawn', G.landLoaded && G.landLoaded());
+  // published-dataset load path: fetch a repo-hosted file -> parse -> render
+  G.loadPublished('data/GLOBESINK_monthly_climatologies_smoothed_interpolated_minimal.nc');
+  chk('published dataset loads (8 vars)', S.model && S.model.varNames.length === 8);
+  chk('published grid 25x45x45x12', S.model.sizes.depth === 25 && S.model.sizes.lat === 45 && S.model.sizes.month === 12);
+  // reload the synthetic file so later checks keep their known variables
+  G.loadModelFromBuffer(fb0.buffer.slice(fb0.byteOffset, fb0.byteOffset + fb0.byteLength), 'globesink_example.nc');
   // linked vs unlinked colour scales
   S.linkScales = true; recomputeAll();
   chk('linked: secLim == mapLim', S.secLim[0] === S.mapLim[0] && S.secLim[1] === S.mapLim[1]);

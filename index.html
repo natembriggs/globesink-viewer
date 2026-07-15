@@ -35,7 +35,13 @@
 <header>
   <div class="grp">
     <label>Dataset</label>
-    <input type="file" id="fileIn" accept=".nc">
+    <div style="display:flex;gap:6px;align-items:center">
+      <select id="datasetSel">
+        <option value="data/GLOBESINK_monthly_climatologies_smoothed_interpolated_minimal.nc">Smoothed climatology (published)</option>
+        <option value="data/GLOBESINK_monthly_climatologies_minimal.nc">Raw climatology (published)</option>
+      </select>
+      <input type="file" id="fileIn" accept=".nc" title="…or load your own NetCDF file">
+    </div>
   </div>
   <div class="grp"><label>Variable</label><select id="varSel"></select></div>
   <div class="grp"><label>Colormap</label>
@@ -83,7 +89,7 @@
   </div>
 </div>
 
-<div id="status">No file loaded — choose a NetCDF (.nc) file to begin.</div>
+<div id="status">Loading published dataset…</div>
 
 <script src="vendor/hdf5.js"></script>
 <script src="src/core.js"></script>
@@ -384,8 +390,9 @@ function drawMap() {
 function varLabel(){ var v=S.model.vars[S.varName]; return v.name + (v.units?' ('+v.units+')':'') + (S.log?' [log]':''); }
 function draw(){ if(!S.model){ drawEmpty(); return; } drawSection(); drawMap(); }
 
-// Blank placeholder shown before any file is loaded.
-function drawEmpty() {
+// Placeholder shown before a dataset is loaded (or while one is loading).
+function drawEmpty(msg) {
+  msg = msg || 'No data — choose a dataset above';
   document.getElementById('secTitle').textContent = '';
   document.getElementById('mapTitle').textContent = '';
   [['secCanvas', 0.72], ['mapCanvas', 0.62]].forEach(function (pair) {
@@ -395,7 +402,7 @@ function drawEmpty() {
     ctx.clearRect(0, 0, cssW, cssH);
     ctx.fillStyle = '#f2f3f5'; ctx.fillRect(0, 0, cssW, cssH);
     ctx.fillStyle = '#9aa0a8'; ctx.font = '14px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText('No data — choose a NetCDF (.nc) file above', cssW / 2, cssH / 2);
+    ctx.fillText(msg, cssW / 2, cssH / 2);
   });
 }
 
@@ -517,9 +524,29 @@ function applyConds(){ recomputeKeep(); recomputeAll(); }
 
 // ---------- wiring ----------
 function setStatus(t){ document.getElementById('status').textContent = t; }
+// Fetch a repo-hosted (published) dataset and load it — no user download step.
+function loadPublished(url){
+  if(!url){ drawEmpty(); return; }
+  setStatus('Loading ' + url.split('/').pop() + ' …');
+  fetch(url).then(function(r){ if(!r.ok) throw new Error('HTTP ' + r.status); return r.arrayBuffer(); })
+    .then(function(ab){ loadModelFromBuffer(ab, url.split('/').pop()); })
+    .catch(function(e){ setStatus('Could not load ' + url + ': ' + e.message); drawEmpty(); });
+}
+// Reflect a user-loaded file in the dropdown so it's clear it's active.
+function markCustom(name){
+  var sel = document.getElementById('datasetSel');
+  var opt = document.getElementById('datasetCustomOpt');
+  if(!opt){ opt = document.createElement('option'); opt.id = 'datasetCustomOpt'; opt.value = '__custom__'; sel.appendChild(opt); }
+  opt.textContent = 'Your file: ' + name;
+  sel.value = '__custom__';
+}
+document.getElementById('datasetSel').onchange = function(e){
+  if(e.target.value === '__custom__') return;       // already loaded
+  loadPublished(e.target.value);
+};
 document.getElementById('fileIn').onchange = function(e){
   var f = e.target.files[0]; if(!f) return; setStatus('Reading '+f.name+' …');
-  var rd = new FileReader(); rd.onload = function(){ loadModelFromBuffer(rd.result, f.name); }; rd.readAsArrayBuffer(f);
+  var rd = new FileReader(); rd.onload = function(){ loadModelFromBuffer(rd.result, f.name); markCustom(f.name); }; rd.readAsArrayBuffer(f);
 };
 document.getElementById('varSel').onchange = function(e){ S.varName = e.target.value; recomputeAll(); };
 document.getElementById('cmapSel').onchange = function(e){ S.cmap = e.target.value; draw(); };
@@ -537,7 +564,8 @@ window.addEventListener('resize', function(){ draw(); });
 
 initInteraction();
 loadLand();
-draw();  // blank placeholder until a file is chosen
+drawEmpty('Loading published dataset…');
+loadPublished(document.getElementById('datasetSel').value);  // default: smoothed climatology
 </script>
 </body>
 </html>
