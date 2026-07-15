@@ -100,6 +100,15 @@
 <script>
 "use strict";
 var MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+// the 8 variables in the built-in minimal files; listed first in the variable
+// menu when a fuller file is loaded
+var CORE_VARS = ['C_200_400','C_400_800','C_800','CHLA_ADJUSTED','D_mean','flux_POC','n_bbp','POCs'];
+// per-variable default colormap
+function defaultCmapFor(v){
+  if (/chl/i.test(v)) return 'greens';       // chlorophyll
+  if (/d_mean/i.test(v)) return 'blues';     // mean diameter
+  return 'reds';
+}
 var MISSING_COLOR = [228,230,233];
 var LAND_FILL = '#d3d7dd', LAND_STROKE = '#6b7178';
 var LAND = null;            // array of polygons; polygon = array of rings (flat [lon,lat,...])
@@ -142,17 +151,30 @@ function loadModelFromBuffer(ab, name) {
     var model = GVCore.parseNetCDF(ab, name);
     S.model = model;
     if (!model.varNames.length) { setStatus('No 4-D variables found in ' + name); return; }
-    // variable dropdown — alphabetical (case-insensitive)
+    // variable dropdown — core variables first, then the rest; each alphabetical
     var sortedNames = model.varNames.slice().sort(function (a, b) { return a.toLowerCase().localeCompare(b.toLowerCase()); });
+    var core = sortedNames.filter(function (n) { return CORE_VARS.indexOf(n) >= 0; });
+    var rest = sortedNames.filter(function (n) { return CORE_VARS.indexOf(n) < 0; });
+    var orderedNames = core.concat(rest);
     var vs = document.getElementById('varSel');
     vs.innerHTML = '';
-    sortedNames.forEach(function (n) {
+    var addOpt = function (parent, n) {
       var o = document.createElement('option'); o.value = n;
-      o.textContent = n + (model.vars[n].units ? '  ('+model.vars[n].units+')' : '');
-      vs.appendChild(o);
-    });
-    S.varName = model.varNames.indexOf('flux_POC') >= 0 ? 'flux_POC' : sortedNames[0];
+      o.textContent = n + (model.vars[n].units ? '  (' + model.vars[n].units + ')' : '');
+      parent.appendChild(o);
+    };
+    if (core.length && rest.length) {   // fuller file: label the two groups
+      var g1 = document.createElement('optgroup'); g1.label = 'Core variables';
+      core.forEach(function (n) { addOpt(g1, n); }); vs.appendChild(g1);
+      var g2 = document.createElement('optgroup'); g2.label = 'Other variables';
+      rest.forEach(function (n) { addOpt(g2, n); }); vs.appendChild(g2);
+    } else {                            // built-in (all core) or no core present
+      orderedNames.forEach(function (n) { addOpt(vs, n); });
+    }
+    S.varName = model.varNames.indexOf('flux_POC') >= 0 ? 'flux_POC' : orderedNames[0];
     vs.value = S.varName;
+    S.cmap = defaultCmapFor(S.varName);
+    document.getElementById('cmapSel').value = S.cmap;
     // defaults: section = whole globe; map = annual, depth bin index 1 (10-50 m)
     S.boxLL = { y: GVCore.idxRange(0, model.sizes.lat - 1), x: GVCore.idxRange(0, model.sizes.lon - 1) };
     var d1 = Math.min(1, model.sizes.depth - 1);
@@ -558,7 +580,12 @@ document.getElementById('fileIn').onchange = function(e){
   var f = e.target.files[0]; if(!f) return; setStatus('Reading '+f.name+' …');
   var rd = new FileReader(); rd.onload = function(){ loadModelFromBuffer(rd.result, f.name); markCustom(f.name); }; rd.readAsArrayBuffer(f);
 };
-document.getElementById('varSel').onchange = function(e){ S.varName = e.target.value; recomputeAll(); };
+document.getElementById('varSel').onchange = function(e){
+  S.varName = e.target.value;
+  S.cmap = defaultCmapFor(S.varName);                       // apply the variable's default colormap
+  document.getElementById('cmapSel').value = S.cmap;
+  recomputeAll();
+};
 document.getElementById('cmapSel').onchange = function(e){ S.cmap = e.target.value; draw(); };
 document.getElementById('scaleSeg').onclick = function(e){ if(e.target.tagName!=='BUTTON')return; segSet('scaleSeg',e.target); S.log = e.target.dataset.v==='log'; recomputeAll(); };
 document.getElementById('missSeg').onclick = function(e){ if(e.target.tagName!=='BUTTON')return; segSet('missSeg',e.target); S.strict = e.target.dataset.v==='strict'; recomputeAll(); };
