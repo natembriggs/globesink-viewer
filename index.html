@@ -29,9 +29,20 @@
   #status { padding:6px 14px; border-top:1px solid var(--line); color:var(--muted); font-size:12px; min-height:26px; }
   .hint { color:var(--muted); font-size:11px; }
   a { color:var(--accent); }
+  #topbar { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:8px 14px; border-bottom:1px solid var(--line); }
+  #topbar .brand { font-weight:600; font-size:14px; }
+  .ext-btn { display:inline-block; padding:5px 12px; border:1px solid var(--accent); border-radius:6px; color:var(--accent); text-decoration:none; font-size:12px; font-weight:600; white-space:nowrap; }
+  .ext-btn:hover { background:var(--accent); color:#fff; }
+  .dlrow { text-align:center; margin-top:2px; }
+  .dlrow .dl { padding:2px 8px; font-size:11px; margin:0 2px; border:1px solid var(--line); border-radius:5px; background:#fff; cursor:pointer; }
+  .dlrow .dl:hover { border-color:var(--accent); color:var(--accent); }
 </style>
 </head>
 <body>
+<div id="topbar">
+  <span class="brand">GLOBESINK viewer</span>
+  <a class="ext-btn" href="https://doi.org/10.5281/zenodo.19558504" target="_blank" rel="noopener">Full published dataset &amp; documentation ↗</a>
+</div>
 <header>
   <div class="grp">
     <label>Dataset</label>
@@ -85,11 +96,21 @@
     <h3 id="secTitle">time × depth section</h3>
     <canvas id="secCanvas"></canvas>
     <div class="hint" style="text-align:center">Drag a month × depth box → updates the map. Click to focus, then arrow keys shift it (←/→ wrap months).</div>
+    <div class="dlrow">Download this panel:
+      <button class="dl" data-plot="section" data-fmt="csvgrid">CSV grid</button>
+      <button class="dl" data-plot="section" data-fmt="csvlong">CSV long</button>
+      <button class="dl" data-plot="section" data-fmt="json">JSON</button>
+    </div>
   </div>
   <div class="panelwrap">
     <h3 id="mapTitle">map</h3>
     <canvas id="mapCanvas"></canvas>
     <div class="hint" style="text-align:center">Drag a lat × lon box → updates the section. Click to focus, then arrow keys shift it (←/→ wrap longitude).</div>
+    <div class="dlrow">Download this panel:
+      <button class="dl" data-plot="map" data-fmt="csvgrid">CSV grid</button>
+      <button class="dl" data-plot="map" data-fmt="csvlong">CSV long</button>
+      <button class="dl" data-plot="map" data-fmt="json">JSON</button>
+    </div>
   </div>
 </div>
 
@@ -256,6 +277,66 @@ function updateTitles() {
     'lat ' + edgeRunsLabel(S.boxLL.y, c.latEdges, fmtLat) + ',  lon ' + edgeRunsLabel(S.boxLL.x, c.lonEdges, fmtLon);
   document.getElementById('mapTitle').textContent =
     monthRunsLabel(S.boxTD.m) + ',  ' + depthRunsLabel(S.boxTD.p);
+}
+
+// ---------- drawing ----------
+// ---------- data export ----------
+function numStr(v){ return (v == null || isNaN(v)) ? '' : String(Number(v.toPrecision(7))); }
+function sectionSelLabel(){ var c = S.model.coords; return 'lat ' + edgeRunsLabel(S.boxLL.y, c.latEdges, fmtLat) + '; lon ' + edgeRunsLabel(S.boxLL.x, c.lonEdges, fmtLon); }
+function mapSelLabel(){ return 'months ' + monthRunsLabel(S.boxTD.m) + '; depth ' + depthRunsLabel(S.boxTD.p); }
+function metaComments(plot){
+  var m = S.model, u = m.vars[S.varName].units;
+  return ['# GLOBESINK viewer export',
+    '# dataset: ' + m.filename,
+    '# variable: ' + S.varName + (u ? ' (' + u + ')' : ''),
+    '# averaged over: ' + (plot === 'section' ? sectionSelLabel() : mapSelLabel()),
+    '# values are averaged data in native units (blank = no data)'];
+}
+function csvSectionGrid(){
+  var m = S.model, nP = m.sizes.depth, nM = m.sizes.month, c = m.coords;
+  var out = metaComments('section'); out.push('# rows: depth (m); columns: month');
+  out.push('depth_m,' + MONTHS.join(','));
+  for (var p = 0; p < nP; p++){ var row = [numStr(c.depth[p])]; for (var mo = 0; mo < nM; mo++) row.push(numStr(S.secArr[p*nM+mo])); out.push(row.join(',')); }
+  return out.join('\n') + '\n';
+}
+function csvSectionLong(){
+  var m = S.model, nP = m.sizes.depth, nM = m.sizes.month, c = m.coords;
+  var out = metaComments('section'); out.push('depth_m,month,' + S.varName);
+  for (var p = 0; p < nP; p++) for (var mo = 0; mo < nM; mo++) out.push([numStr(c.depth[p]), mo+1, numStr(S.secArr[p*nM+mo])].join(','));
+  return out.join('\n') + '\n';
+}
+function csvMapGrid(){
+  var m = S.model, nY = m.sizes.lat, nX = m.sizes.lon, c = m.coords;
+  var out = metaComments('map'); out.push('# rows: latitude (deg N); columns: longitude (deg E)');
+  var hdr = ['lat_deg']; for (var x = 0; x < nX; x++) hdr.push(numStr(c.lon[x])); out.push(hdr.join(','));
+  for (var y = 0; y < nY; y++){ var row = [numStr(c.lat[y])]; for (var xx = 0; xx < nX; xx++) row.push(numStr(S.mapArr[y*nX+xx])); out.push(row.join(',')); }
+  return out.join('\n') + '\n';
+}
+function csvMapLong(){
+  var m = S.model, nY = m.sizes.lat, nX = m.sizes.lon, c = m.coords;
+  var out = metaComments('map'); out.push('lon_deg,lat_deg,' + S.varName);
+  for (var y = 0; y < nY; y++) for (var x = 0; x < nX; x++) out.push([numStr(c.lon[x]), numStr(c.lat[y]), numStr(S.mapArr[y*nX+x])].join(','));
+  return out.join('\n') + '\n';
+}
+function grid2d(arr, rows, cols){ var out = []; for (var r = 0; r < rows; r++){ var row = []; for (var k = 0; k < cols; k++){ var v = arr[r*cols+k]; row.push(isNaN(v) ? null : Number(v.toPrecision(7))); } out.push(row); } return out; }
+function jsonExport(plot){
+  var m = S.model, obj = { source: 'GLOBESINK viewer', dataset: m.filename, plot: plot, variable: S.varName,
+    units: m.vars[S.varName].units || null, averaged_over: (plot === 'section' ? sectionSelLabel() : mapSelLabel()) };
+  if (plot === 'section'){ obj.dims = ['depth','month']; obj.coords = { depth_m: Array.prototype.slice.call(m.coords.depth), month: Array.prototype.slice.call(m.coords.month) }; obj.values = grid2d(S.secArr, m.sizes.depth, m.sizes.month); }
+  else { obj.dims = ['lat','lon']; obj.coords = { lat_deg: Array.prototype.slice.call(m.coords.lat), lon_deg: Array.prototype.slice.call(m.coords.lon) }; obj.values = grid2d(S.mapArr, m.sizes.lat, m.sizes.lon); }
+  return JSON.stringify(obj, null, 2);
+}
+function downloadText(filename, text, mime){
+  var blob = new Blob([text], { type: mime || 'text/plain' }), url = URL.createObjectURL(blob);
+  var a = document.createElement('a'); a.href = url; a.download = filename; document.body.appendChild(a); a.click();
+  setTimeout(function(){ document.body.removeChild(a); URL.revokeObjectURL(url); }, 0);
+}
+function downloadPanel(plot, fmt){
+  if (!S.model) return;
+  var base = 'GLOBESINK_' + S.varName + '_' + plot;
+  if (fmt === 'csvgrid') downloadText(base + '.csv', plot === 'section' ? csvSectionGrid() : csvMapGrid(), 'text/csv');
+  else if (fmt === 'csvlong') downloadText(base + '_long.csv', plot === 'section' ? csvSectionLong() : csvMapLong(), 'text/csv');
+  else if (fmt === 'json') downloadText(base + '.json', jsonExport(plot), 'application/json');
 }
 
 // ---------- drawing ----------
@@ -597,6 +678,10 @@ document.getElementById('linkScales').onchange = function(e){ S.linkScales = e.t
 document.getElementById('vmin').oninput = function(e){ S.vmin = +e.target.value; S.secLim = [S.vmin, S.vmax]; S.mapLim = [S.vmin, S.vmax]; draw(); };
 document.getElementById('vmax').oninput = function(e){ S.vmax = +e.target.value; S.secLim = [S.vmin, S.vmax]; S.mapLim = [S.vmin, S.vmax]; draw(); };
 document.getElementById('addCond').onclick = function(){ if(!S.model)return; S.conditions.push({varName:S.model.varNames[0],op:'>=',value:0}); renderConds(); };
+document.addEventListener('click', function(e){
+  var b = e.target && e.target.closest ? e.target.closest('.dl') : null;
+  if (b) downloadPanel(b.getAttribute('data-plot'), b.getAttribute('data-fmt'));
+});
 window.addEventListener('resize', function(){ draw(); });
 
 initInteraction();

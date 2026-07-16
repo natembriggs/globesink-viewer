@@ -79,7 +79,7 @@ try {
   var m = html.match(/<script>([\s\S]*?)<\/script>\s*<\/body>/);
   if (!m) throw new Error('could not extract inline script');
   // strict-mode eval keeps declarations local, so expose what we need to assert on
-  eval(m[1] + '\n;globalThis.__gv = { S: S, recomputeAll: recomputeAll, recomputeKeep: recomputeKeep, loadModelFromBuffer: loadModelFromBuffer, loadPublished: loadPublished, landLoaded: function(){ return LAND != null; } };');
+  eval(m[1] + '\n;globalThis.__gv = { S: S, recomputeAll: recomputeAll, recomputeKeep: recomputeKeep, loadModelFromBuffer: loadModelFromBuffer, loadPublished: loadPublished, landLoaded: function(){ return LAND != null; }, csvSectionGrid: csvSectionGrid, csvMapLong: csvMapLong, jsonExport: jsonExport };');
   var G = globalThis.__gv, S = G.S;
   var recomputeAll = G.recomputeAll, recomputeKeep = G.recomputeKeep;
   // the app now starts blank; drive the file-load path directly
@@ -123,6 +123,14 @@ try {
   chk('linked: secLim == mapLim', S.secLim[0] === S.mapLim[0] && S.secLim[1] === S.mapLim[1]);
   S.linkScales = false; recomputeAll();
   chk('unlinked: both limits finite', isFinite(S.secLim[0]) && isFinite(S.secLim[1]) && isFinite(S.mapLim[0]) && isFinite(S.mapLim[1]));
+  // data export generators (pure string builders)
+  var secCsv = G.csvSectionGrid();
+  chk('section CSV grid header', secCsv.indexOf('depth_m,Jan,') >= 0);
+  chk('section CSV grid row count', secCsv.trim().split('\n').filter(function (l) { return l[0] !== '#'; }).length === 1 + S.model.sizes.depth);
+  var mapLong = G.csvMapLong().trim().split('\n').filter(function (l) { return l[0] !== '#' && l.indexOf('lon_deg') !== 0; });
+  chk('map CSV long row count', mapLong.length === S.model.sizes.lat * S.model.sizes.lon);
+  var js = JSON.parse(G.jsonExport('section'));
+  chk('json section shape', js.dims[0] === 'depth' && js.values.length === S.model.sizes.depth && js.values[0].length === S.model.sizes.month);
 } catch (e) {
   print('FAIL runtime: ' + e + (e.stack ? '\n' + e.stack : ''));
   fail++;

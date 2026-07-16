@@ -36,6 +36,9 @@ selection stays on each panel as a thin magenta rectangle.
   keys shift its selection one cell at a time — left/right wrap (month on the
   section, longitude on the map), up/down clamp (depth, latitude). A wrapped
   selection is drawn as two boxes.
+- **Export** the data behind either panel — CSV grid, CSV long/tidy, or JSON —
+  with the variable, units, and averaging selection recorded in the file.
+- A top-bar link to the **full published dataset and documentation** on Zenodo.
 - **Land overlay:** a 50 m coastline (islands down to ~Kerguelen) is drawn over
   the map, masking the data under land.
 
