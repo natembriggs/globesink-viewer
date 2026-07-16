@@ -25,7 +25,7 @@ function ctxStub() {
   var noop = function () {};
   return { setTransform: noop, clearRect: noop, fillRect: noop, strokeRect: noop,
     beginPath: noop, moveTo: noop, lineTo: noop, stroke: noop, fill: noop, fillText: noop,
-    rect: noop, clip: noop, closePath: noop,
+    rect: noop, clip: noop, closePath: noop, setLineDash: noop,
     save: noop, restore: noop, translate: noop, rotate: noop, scale: noop,
     createLinearGradient: function () { return { addColorStop: noop }; },
     fillStyle: '', strokeStyle: '', font: '', lineWidth: 1, lineJoin: '', textAlign: '', textBaseline: '' };
@@ -93,8 +93,9 @@ try {
   chk('default varName set', !!S.varName);
   chk('section array sized nP*nM', S.secArr && S.secArr.length === S.model.sizes.depth * S.model.sizes.month);
   chk('map array sized nY*nX', S.mapArr && S.mapArr.length === S.model.sizes.lat * S.model.sizes.lon);
-  chk('boxTD default depth bin 1', S.boxTD.p.length === 1 && S.boxTD.p[0] === 1);
-  chk('boxTD default annual', S.boxTD.m.length === S.model.sizes.month && S.boxTD.m[0] === 0);
+  var rcTD = GVCore.selRowsCols(S.boxTD.set, S.model.sizes.month);
+  chk('boxTD default depth bin 1', rcTD.rows.length === 1 && rcTD.rows[0] === 1);
+  chk('boxTD default annual', rcTD.cols.length === S.model.sizes.month && rcTD.cols[0] === 0);
   chk('vmax > vmin (autorange)', S.vmax > S.vmin);
   chk('varSel option count', document.getElementById('varSel')._optCount === undefined || true);
 
@@ -103,13 +104,14 @@ try {
   S.strict = true; recomputeAll(); chk('strict recompute ok', S.secArr.length > 0);
   S.conditions = [{ varName: 'n_profiles', op: '>=', value: 40 }]; recomputeKeep(); recomputeAll();
   chk('conditioned recompute ok', S.keep != null && S.secArr.length > 0);
-  // simulate a section drag -> should set boxTD and redraw without error
-  S.boxTD = { p: GVCore.idxRange(0, 2), m: GVCore.idxRange(3, 7) }; recomputeAll();
+  // simulate a section drag -> rectangle depth 0..2 x months 3..7
+  var nMx = S.model.sizes.month;
+  S.boxTD = { anchor: [0, 3], active: [2, 7], set: GVCore.selRectSet([0, 3], [2, 7], nMx) }; recomputeAll();
   chk('map after box ok', S.mapArr.length === S.model.sizes.lat * S.model.sizes.lon);
-  // a WRAPPED month selection (Oct-Dec shifted right -> Nov,Dec,Jan) must draw
-  // + reduce without error and read as two runs
-  S.boxTD.m = GVCore.shiftWrap(GVCore.idxRange(9, 11), 1, S.model.sizes.month); recomputeAll();
-  chk('wrapped month -> 2 runs', GVCore.runsFromIdx(S.boxTD.m).length === 2);
+  // discontiguous/wrapped month selection {Nov,Dec,Jan}=cols{10,11,0} on depth row 1
+  S.boxTD.set = {}; [10, 11, 0].forEach(function (mm) { S.boxTD.set[1 * nMx + mm] = 1; });
+  S.boxTD.anchor = [1, 10]; S.boxTD.active = [1, 0]; recomputeAll();
+  chk('wrapped month -> 2 col runs', GVCore.runsFromIdx(GVCore.selRowsCols(S.boxTD.set, nMx).cols).length === 2);
   chk('map after wrapped box ok', S.mapArr.length === S.model.sizes.lat * S.model.sizes.lon);
   chk('land overlay loaded + drawn', G.landLoaded && G.landLoaded());
   // published-dataset load path: fetch a repo-hosted file -> parse -> render

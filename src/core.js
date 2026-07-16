@@ -261,24 +261,88 @@
     return runs;
   }
 
+  // ---- 2D cell-set selection (Excel-like) ----
+  // A selection is a Set of encoded cells (row*NC + col) plus an anchor and an
+  // active cell. Cells can be an arbitrary set (rectangles, wrapped columns, or
+  // discontiguous via ctrl-click). Rows never wrap; columns wrap for the
+  // panels that want it (month / lon).
+  function selRectSet(anchor, active, NC) {
+    var r0 = Math.min(anchor[0], active[0]), r1 = Math.max(anchor[0], active[0]);
+    var c0 = Math.min(anchor[1], active[1]), c1 = Math.max(anchor[1], active[1]);
+    var set = {};
+    for (var r = r0; r <= r1; r++) for (var c = c0; c <= c1; c++) set[r * NC + c] = 1;
+    return set;
+  }
+  function selCells(set, NC) {
+    var out = []; for (var k in set) { var e = +k; out.push([Math.floor(e / NC), e % NC]); } return out;
+  }
+  function selRowsCols(set, NC) {
+    var R = {}, C = {};
+    for (var k in set) { var e = +k; R[Math.floor(e / NC)] = 1; C[e % NC] = 1; }
+    var toSorted = function (o) { return Object.keys(o).map(Number).sort(function (a, b) { return a - b; }); };
+    return { rows: toSorted(R), cols: toSorted(C) };
+  }
+  // Rigidly move a whole selection by (dr,dc). Rows clamp as a group (no move if
+  // it would leave the grid); columns wrap when wrapCol is set, else clamp.
+  function selMove(set, anchor, active, dr, dc, NR, NC, wrapCol) {
+    var minR = Infinity, maxR = -Infinity, minC = Infinity, maxC = -Infinity;
+    for (var k in set) { var e = +k, r = Math.floor(e / NC), c = e % NC;
+      if (r < minR) minR = r; if (r > maxR) maxR = r; if (c < minC) minC = c; if (c > maxC) maxC = c; }
+    if (minR + dr < 0 || maxR + dr > NR - 1) dr = 0;                 // rows: clamp group
+    if (!wrapCol && (minC + dc < 0 || maxC + dc > NC - 1)) dc = 0;   // cols: clamp if not wrapping
+    var mvC = function (c) { return wrapCol ? ((c + dc) % NC + NC) % NC : c + dc; };
+    var ns = {};
+    for (var k2 in set) { var e2 = +k2; ns[(Math.floor(e2 / NC) + dr) * NC + mvC(e2 % NC)] = 1; }
+    var mv = function (pt) { return [pt[0] + dr, mvC(pt[1])]; };
+    return { set: ns, anchor: mv(anchor), active: mv(active) };
+  }
+  function clampI(v, a, b) { return v < a ? a : v > b ? b : v; }
+
+  // Apply a mouse click at `cell` [r,c] to a selection box {set,anchor,active},
+  // Excel-style: ctrl/cmd toggles one cell (discontiguous); shift extends the
+  // rectangle from the anchor; plain click starts a new single-cell box.
+  // Mutates box in place.
+  function selClick(box, cell, NC, shiftKey, ctrlKey) {
+    if (ctrlKey) {
+      var key = cell[0] * NC + cell[1];
+      if (box.set[key]) delete box.set[key]; else box.set[key] = 1;
+      box.anchor = cell.slice(); box.active = cell.slice();
+    } else if (shiftKey) {
+      box.active = cell.slice();
+      box.set = selRectSet(box.anchor, box.active, NC);
+    } else {
+      box.anchor = cell.slice(); box.active = cell.slice();
+      box.set = selRectSet(cell, cell, NC);
+    }
+  }
+
+  // Apply an arrow key. shift → grow/shrink from the anchor (clamped both axes);
+  // plain → move the whole selection (columns wrap, rows clamp). Mutates box.
+  function selArrow(box, dr, dc, NR, NC, shiftKey) {
+    if (shiftKey) {
+      box.active = [clampI(box.active[0] + dr, 0, NR - 1), clampI(box.active[1] + dc, 0, NC - 1)];
+      box.set = selRectSet(box.anchor, box.active, NC);
+    } else {
+      var mv = selMove(box.set, box.anchor, box.active, dr, dc, NR, NC, true);
+      box.set = mv.set; box.anchor = mv.anchor; box.active = mv.active;
+    }
+  }
+
   // Left panel: value(depth, month) averaged over a set of lat/lon cells.
-  // yIdx / xIdx are arrays of cell indices.
-  function sectionReduce(model, varName, keep, strict, yIdx, xIdx) {
+  // cellsYX is an array of [y,x] pairs (arbitrary, possibly discontiguous).
+  function sectionReduce(model, varName, keep, strict, cellsYX) {
     var s = model.sizes, nP = s.depth, nY = s.lat, nX = s.lon, nM = s.month;
-    var d = model.vars[varName].data;
+    var d = model.vars[varName].data, nC = cellsYX.length;
     var out = new Float32Array(nP * nM);
     for (var p = 0; p < nP; p++) {
       for (var m = 0; m < nM; m++) {
         var sum = 0, cnt = 0, sawNaN = false;
-        for (var yi = 0; yi < yIdx.length; yi++) {
-          var y = yIdx[yi];
-          for (var xi = 0; xi < xIdx.length; xi++) {
-            var idx = ((p * nY + y) * nX + xIdx[xi]) * nM + m;
-            if (keep && !keep[idx]) continue;
-            var v = d[idx];
-            if (isNaN(v)) { sawNaN = true; continue; }
-            sum += v; cnt++;
-          }
+        for (var i = 0; i < nC; i++) {
+          var idx = ((p * nY + cellsYX[i][0]) * nX + cellsYX[i][1]) * nM + m;
+          if (keep && !keep[idx]) continue;
+          var v = d[idx];
+          if (isNaN(v)) { sawNaN = true; continue; }
+          sum += v; cnt++;
         }
         out[p * nM + m] = (strict && sawNaN) || cnt === 0 ? NaN : sum / cnt;
       }
@@ -287,22 +351,20 @@
   }
 
   // Right panel: value(lat, lon) averaged over a set of depth/month cells.
-  function mapReduce(model, varName, keep, strict, pIdx, mIdx) {
+  // cellsPM is an array of [p,m] pairs.
+  function mapReduce(model, varName, keep, strict, cellsPM) {
     var s = model.sizes, nP = s.depth, nY = s.lat, nX = s.lon, nM = s.month;
-    var d = model.vars[varName].data;
+    var d = model.vars[varName].data, nC = cellsPM.length;
     var out = new Float32Array(nY * nX);
     for (var y = 0; y < nY; y++) {
       for (var x = 0; x < nX; x++) {
         var sum = 0, cnt = 0, sawNaN = false;
-        for (var pi = 0; pi < pIdx.length; pi++) {
-          var base = (pIdx[pi] * nY + y) * nX + x;
-          for (var mi = 0; mi < mIdx.length; mi++) {
-            var idx = base * nM + mIdx[mi];
-            if (keep && !keep[idx]) continue;
-            var v = d[idx];
-            if (isNaN(v)) { sawNaN = true; continue; }
-            sum += v; cnt++;
-          }
+        for (var i = 0; i < nC; i++) {
+          var idx = ((cellsPM[i][0] * nY + y) * nX + x) * nM + cellsPM[i][1];
+          if (keep && !keep[idx]) continue;
+          var v = d[idx];
+          if (isNaN(v)) { sawNaN = true; continue; }
+          sum += v; cnt++;
         }
         out[y * nX + x] = (strict && sawNaN) || cnt === 0 ? NaN : sum / cnt;
       }
@@ -360,6 +422,12 @@
     shiftWrap: shiftWrap,
     shiftClamp: shiftClamp,
     runsFromIdx: runsFromIdx,
+    selRectSet: selRectSet,
+    selCells: selCells,
+    selRowsCols: selRowsCols,
+    selMove: selMove,
+    selClick: selClick,
+    selArrow: selArrow,
     CANON: CANON
   };
   root.GVCore = api;

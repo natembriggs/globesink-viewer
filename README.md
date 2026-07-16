@@ -32,10 +32,14 @@ selection stays on each panel as a thin magenta rectangle.
   2–98th percentile) colour limits. With auto on, **link L/R** shares one scale
   across both panels or lets each auto-scale independently (so a deep,
   low-signal map isn't swamped by high surface values in the section).
-- **Keyboard navigation:** click a plot to focus it (magenta border), then arrow
-  keys shift its selection one cell at a time — left/right wrap (month on the
-  section, longitude on the map), up/down clamp (depth, latitude). A wrapped
-  selection is drawn as two boxes.
+- **Excel-like cell selection:** click or drag to select (snapping to whole
+  cells, updating the other panel live); **shift+click** extends the box from
+  its anchor; **⌘/Ctrl+click** adds or removes an individual cell (discontiguous
+  selections are allowed). The anchor cell is marked with a dashed outline.
+- **Keyboard:** click a plot to focus it (magenta border), then arrow keys move
+  the whole box one cell (left/right wrap — month on the section, longitude on
+  the map; up/down clamp), and **shift+arrows** grow or shrink it from the
+  anchor.
 - **Export** the data behind either panel — CSV grid, CSV long/tidy, or JSON —
   with the variable, units, and averaging selection recorded in the file.
 - A top-bar link to the **full published dataset and documentation** on Zenodo.

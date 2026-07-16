@@ -95,7 +95,7 @@
   <div class="panelwrap">
     <h3 id="secTitle">time × depth section</h3>
     <canvas id="secCanvas"></canvas>
-    <div class="hint" style="text-align:center">Drag a month × depth box → updates the map. Click to focus, then arrow keys shift it (←/→ wrap months).</div>
+    <div class="hint" style="text-align:center">Click/drag to select (updates the map live). Shift+click extends; ⌘/Ctrl+click adds/removes a cell. Arrows move the box (←/→ wrap months); Shift+arrows resize it.</div>
     <div class="dlrow">Download this panel:
       <button class="dl" data-plot="section" data-fmt="csvgrid">CSV grid</button>
       <button class="dl" data-plot="section" data-fmt="csvlong">CSV long</button>
@@ -105,7 +105,7 @@
   <div class="panelwrap">
     <h3 id="mapTitle">map</h3>
     <canvas id="mapCanvas"></canvas>
-    <div class="hint" style="text-align:center">Drag a lat × lon box → updates the section. Click to focus, then arrow keys shift it (←/→ wrap longitude).</div>
+    <div class="hint" style="text-align:center">Click/drag to select (updates the section live). Shift+click extends; ⌘/Ctrl+click adds/removes a cell. Arrows move the box (←/→ wrap longitude); Shift+arrows resize it.</div>
     <div class="dlrow">Download this panel:
       <button class="dl" data-plot="map" data-fmt="csvgrid">CSV grid</button>
       <button class="dl" data-plot="map" data-fmt="csvlong">CSV long</button>
@@ -156,8 +156,8 @@ var S = {
   model: null, varName: null, cmap: 'reds', log: false, strict: false,
   autoRange: true, linkScales: true, vmin: 0, vmax: 1,
   secLim: [0, 1], mapLim: [0, 1],  // per-panel colour limits [min,max]
-  boxLL: null,  // {y:[...], x:[...]} lat/lon cell indices -> drives section; drawn on map
-  boxTD: null,  // {p:[...], m:[...]} depth/month cell indices -> drives map; drawn on section
+  boxLL: null,  // {set,anchor,active} lat/lon cells (row=lat,col=lon) -> drives section; drawn on map
+  boxTD: null,  // {set,anchor,active} depth/month cells (row=depth,col=month) -> drives map; drawn on section
   focus: null,  // 'section' | 'map' — last-clicked plot; receives arrow keys
   conditions: [], keep: null,
   secArr: null, mapArr: null
@@ -197,9 +197,10 @@ function loadModelFromBuffer(ab, name) {
     S.cmap = defaultCmapFor(S.varName);
     document.getElementById('cmapSel').value = S.cmap;
     // defaults: section = whole globe; map = annual, depth bin index 1 (10-50 m)
-    S.boxLL = { y: GVCore.idxRange(0, model.sizes.lat - 1), x: GVCore.idxRange(0, model.sizes.lon - 1) };
-    var d1 = Math.min(1, model.sizes.depth - 1);
-    S.boxTD = { p: GVCore.idxRange(d1, d1), m: GVCore.idxRange(0, model.sizes.month - 1) };
+    var nY = model.sizes.lat, nX = model.sizes.lon, nP = model.sizes.depth, nM = model.sizes.month;
+    var d1 = Math.min(1, nP - 1);
+    S.boxLL = { anchor: [0, 0], active: [nY - 1, nX - 1], set: GVCore.selRectSet([0, 0], [nY - 1, nX - 1], nX) };
+    S.boxTD = { anchor: [d1, 0], active: [d1, nM - 1], set: GVCore.selRectSet([d1, 0], [d1, nM - 1], nM) };
     rebuildCondVarOptions();
     recomputeKeep();
     recomputeAll();
@@ -219,8 +220,8 @@ function recomputeKeep() {
 function recomputeAll() {
   if (!S.model || !S.varName) return;
   var m = S.model;
-  S.secArr = GVCore.sectionReduce(m, S.varName, S.keep, S.strict, S.boxLL.y, S.boxLL.x);
-  S.mapArr = GVCore.mapReduce(m, S.varName, S.keep, S.strict, S.boxTD.p, S.boxTD.m);
+  S.secArr = GVCore.sectionReduce(m, S.varName, S.keep, S.strict, GVCore.selCells(S.boxLL.set, m.sizes.lon));
+  S.mapArr = GVCore.mapReduce(m, S.varName, S.keep, S.strict, GVCore.selCells(S.boxTD.set, m.sizes.month));
   if (S.autoRange) {
     if (S.linkScales) {
       var both = new Float32Array(S.secArr.length + S.mapArr.length);
@@ -273,17 +274,19 @@ function depthRunsLabel(idx) {
 }
 function updateTitles() {
   var c = S.model.coords;
+  var rcSec = GVCore.selRowsCols(S.boxLL.set, S.model.sizes.lon);   // rows=lat, cols=lon
+  var rcMap = GVCore.selRowsCols(S.boxTD.set, S.model.sizes.month); // rows=depth, cols=month
   document.getElementById('secTitle').textContent =
-    'lat ' + edgeRunsLabel(S.boxLL.y, c.latEdges, fmtLat) + ',  lon ' + edgeRunsLabel(S.boxLL.x, c.lonEdges, fmtLon);
+    'lat ' + edgeRunsLabel(rcSec.rows, c.latEdges, fmtLat) + ',  lon ' + edgeRunsLabel(rcSec.cols, c.lonEdges, fmtLon);
   document.getElementById('mapTitle').textContent =
-    monthRunsLabel(S.boxTD.m) + ',  ' + depthRunsLabel(S.boxTD.p);
+    monthRunsLabel(rcMap.cols) + ',  ' + depthRunsLabel(rcMap.rows);
 }
 
 // ---------- drawing ----------
 // ---------- data export ----------
 function numStr(v){ return (v == null || isNaN(v)) ? '' : String(Number(v.toPrecision(7))); }
-function sectionSelLabel(){ var c = S.model.coords; return 'lat ' + edgeRunsLabel(S.boxLL.y, c.latEdges, fmtLat) + '; lon ' + edgeRunsLabel(S.boxLL.x, c.lonEdges, fmtLon); }
-function mapSelLabel(){ return 'months ' + monthRunsLabel(S.boxTD.m) + '; depth ' + depthRunsLabel(S.boxTD.p); }
+function sectionSelLabel(){ var c = S.model.coords, rc = GVCore.selRowsCols(S.boxLL.set, S.model.sizes.lon); return 'lat ' + edgeRunsLabel(rc.rows, c.latEdges, fmtLat) + '; lon ' + edgeRunsLabel(rc.cols, c.lonEdges, fmtLon); }
+function mapSelLabel(){ var rc = GVCore.selRowsCols(S.boxTD.set, S.model.sizes.month); return 'months ' + monthRunsLabel(rc.cols) + '; depth ' + depthRunsLabel(rc.rows); }
 function metaComments(plot){
   var m = S.model, u = m.vars[S.varName].units;
   return ['# GLOBESINK viewer export',
@@ -429,11 +432,32 @@ function drawLand(ctx, R, lon0, lon1, lat0, lat1) {
   ctx.restore();
 }
 
-function selRect(ctx, x0, y0, x1, y1) {
+// Outline the union boundary of a cell set: for each selected cell, draw only
+// the edges where the neighbour isn't also selected. Handles rectangles,
+// wrapped columns, and discontiguous (ctrl-click) selections uniformly.
+// colPix/rowPix map a column/row index to its left/top pixel edge.
+function drawCellSetOutline(ctx, set, NC, colPix, rowPix) {
   ctx.save();
-  ctx.strokeStyle = 'rgba(192,38,211,0.95)'; ctx.lineWidth = 1.5;
-  var x = Math.min(x0,x1), y = Math.min(y0,y1), w = Math.abs(x1-x0), h = Math.abs(y1-y0);
-  ctx.strokeRect(x + .5, y + .5, w, h);
+  ctx.strokeStyle = 'rgba(192,38,211,0.95)'; ctx.lineWidth = 1.5; ctx.setLineDash([]);
+  ctx.beginPath();
+  for (var k in set) {
+    var e = +k, r = Math.floor(e / NC), c = e % NC;
+    var x0 = colPix(c), x1 = colPix(c + 1), y0 = rowPix(r), y1 = rowPix(r + 1);
+    if (!(r > 0 && set[(r - 1) * NC + c]))     { ctx.moveTo(x0, y0); ctx.lineTo(x1, y0); } // top
+    if (!set[(r + 1) * NC + c])                { ctx.moveTo(x0, y1); ctx.lineTo(x1, y1); } // bottom
+    if (!(c > 0 && set[r * NC + (c - 1)]))     { ctx.moveTo(x0, y0); ctx.lineTo(x0, y1); } // left
+    if (!(c < NC - 1 && set[r * NC + (c + 1)])){ ctx.moveTo(x1, y0); ctx.lineTo(x1, y1); } // right
+  }
+  ctx.stroke(); ctx.restore();
+}
+// Dashed, inset outline marking the anchor cell (the drag/extend origin).
+function drawAnchorCell(ctx, anchor, NC, colPix, rowPix) {
+  if (!anchor) return;
+  var x0 = colPix(anchor[1]), x1 = colPix(anchor[1] + 1), y0 = rowPix(anchor[0]), y1 = rowPix(anchor[0] + 1);
+  var x = Math.min(x0, x1), y = Math.min(y0, y1), w = Math.abs(x1 - x0), h = Math.abs(y1 - y0);
+  ctx.save();
+  ctx.strokeStyle = 'rgba(192,38,211,0.9)'; ctx.lineWidth = 1; ctx.setLineDash([3, 2]);
+  ctx.strokeRect(x + 1.5, y + 1.5, Math.max(0, w - 3), Math.max(0, h - 3));
   ctx.restore();
 }
 
@@ -458,13 +482,9 @@ function drawSection() {
   dticks.forEach(function(dv){ if(dv>=dTop&&dv<=dBot){ var yy=R.y+((dv-dTop)/(dBot-dTop))*R.h; ctx.beginPath();ctx.moveTo(R.x-3,yy);ctx.lineTo(R.x,yy);ctx.stroke(); ctx.fillText(dv, R.x-6, yy);} });
   ctx.save(); ctx.translate(14, R.y+R.h/2); ctx.rotate(-Math.PI/2); ctx.textAlign='center'; ctx.textBaseline='middle'; ctx.fillText('depth (m)',0,0); ctx.restore();
   drawColorbar(ctx, cssW, R, varLabel(), S.secLim);
-  // persistent selection (month×depth cells that drive the map); one box per
-  // contiguous run pair, so a wrapped month range shows as two boxes
-  GVCore.runsFromIdx(S.boxTD.p).forEach(function (pr) {
-    GVCore.runsFromIdx(S.boxTD.m).forEach(function (mr) {
-      selRect(ctx, xEdgePix(mr[0]), yEdgePix(pr[0]), xEdgePix(mr[1] + 1), yEdgePix(pr[1] + 1));
-    });
-  });
+  // selection cells (depth=row, month=col) that drive the map + anchor marker
+  drawCellSetOutline(ctx, S.boxTD.set, nM, xEdgePix, yEdgePix);
+  drawAnchorCell(ctx, S.boxTD.anchor, nM, xEdgePix, yEdgePix);
   secGeom = { R:R, cv:cv, xEdgePix:xEdgePix, yEdgePix:yEdgePix, nCols:nM, nRows:nP };
 }
 
@@ -488,11 +508,9 @@ function drawMap() {
   ctx.textAlign='right'; ctx.textBaseline='middle';
   [-60,-30,0,30,60].forEach(function(lv){ if(lv>=Math.min(lat0,lat1)&&lv<=Math.max(lat0,lat1)){ var yy=R.y+(1-(lv-lat0)/(lat1-lat0))*R.h; ctx.beginPath();ctx.moveTo(R.x-3,yy);ctx.lineTo(R.x,yy);ctx.stroke(); ctx.fillText(lv, R.x-6, yy);} });
   drawColorbar(ctx, cssW, R, varLabel(), S.mapLim);
-  GVCore.runsFromIdx(S.boxLL.y).forEach(function (yr) {
-    GVCore.runsFromIdx(S.boxLL.x).forEach(function (xr) {
-      selRect(ctx, xEdgePix(xr[0]), yEdgePix(yr[0]), xEdgePix(xr[1] + 1), yEdgePix(yr[1] + 1));
-    });
-  });
+  // selection cells (lat=row, lon=col) that drive the section + anchor marker
+  drawCellSetOutline(ctx, S.boxLL.set, nX, xEdgePix, yEdgePix);
+  drawAnchorCell(ctx, S.boxLL.anchor, nX, xEdgePix, yEdgePix);
   mapGeom = { R:R, cv:cv, nCols:nX, nRows:nY, lonE:lonE, latE:latE, lon0:lon0, lon1:lon1, lat0:lat0, lat1:lat1 };
 }
 function varLabel(){ var v=S.model.vars[S.varName]; return v.name + (v.units?' ('+v.units+')':'') + (S.log?' [log]':''); }
@@ -514,58 +532,67 @@ function drawEmpty(msg) {
   });
 }
 
-// ---------- interaction ----------
-function attachDrag(getGeom, onBox) {
-  var dragging = false, sx = 0, sy = 0, curCtx = null;
-  function pos(ev, cv) { var b = cv.getBoundingClientRect(); return { x: ev.clientX - b.left, y: ev.clientY - b.top }; }
-  function down(ev) {
-    var g = getGeom(); if (!g) return; var p = pos(ev, g.cv);
-    if (p.x < g.R.x || p.x > g.R.x + g.R.w || p.y < g.R.y || p.y > g.R.y + g.R.h) return;
-    dragging = true; sx = p.x; sy = p.y; ev.preventDefault();
-  }
-  function move(ev) {
-    if (!dragging) return; var g = getGeom(); var p = pos(ev, g.cv);
-    draw(); // repaint base
-    var ctx = g.cv.getContext('2d'); var dpr = window.devicePixelRatio||1; ctx.setTransform(dpr,0,0,dpr,0,0);
-    selRect(ctx, sx, sy, clamp(p.x, g.R.x, g.R.x+g.R.w), clamp(p.y, g.R.y, g.R.y+g.R.h));
-  }
-  function up(ev) {
-    if (!dragging) return; dragging = false; var g = getGeom(); var p = pos(ev, g.cv);
-    var ex = clamp(p.x, g.R.x, g.R.x+g.R.w), ey = clamp(p.y, g.R.y, g.R.y+g.R.h);
-    onBox(g, sx, sy, ex, ey);
-  }
-  document.addEventListener('mousemove', move);
-  document.addEventListener('mouseup', up);
-  return down;
-}
+// ---------- interaction (Excel-like cell selection) ----------
 function clamp(v,a,b){ return v<a?a:v>b?b:v; }
+function clampi(v,a,b){ v=Math.round(v); return v<a?a:v>b?b:v; }
+function relpos(ev, cv){ var b = cv.getBoundingClientRect(); return { x: ev.clientX - b.left, y: ev.clientY - b.top }; }
+
+// pixel -> [row,col] cell for each panel (row=vertical axis, col=horizontal)
+function secPixelToCell(px, py, g){
+  var c = S.model.coords, nM = S.model.sizes.month, nP = S.model.sizes.depth;
+  var col = clampi(Math.floor((px - g.R.x) / g.R.w * nM), 0, nM - 1);
+  var depthVal = c.depthEdges[0] + (py - g.R.y) / g.R.h * (c.depthEdges[nP] - c.depthEdges[0]);
+  return [GVCore.cellIndexForValue(c.depthEdges, depthVal), col];
+}
+function mapPixelToCell(px, py, g){
+  var c = S.model.coords;
+  var lonVal = g.lon0 + (px - g.R.x) / g.R.w * (g.lon1 - g.lon0);
+  var latVal = g.lat0 + (1 - (py - g.R.y) / g.R.h) * (g.lat1 - g.lat0);
+  return [GVCore.cellIndexForValue(c.latEdges, latVal), GVCore.cellIndexForValue(c.lonEdges, lonVal)];
+}
+
+// throttle live recompute during a drag to one per animation frame
+var _recPending = false;
+function scheduleRecompute(){
+  if (_recPending) return; _recPending = true;
+  var raf = window.requestAnimationFrame || function(f){ return setTimeout(f, 16); };
+  raf(function(){ _recPending = false; recomputeAll(); });
+}
+
+function panelMouseDown(ev, P){
+  var g = P.getGeom(); if (!g) return;
+  var p = relpos(ev, g.cv);
+  if (p.x < g.R.x || p.x > g.R.x + g.R.w || p.y < g.R.y || p.y > g.R.y + g.R.h) return;
+  setFocus(P.focus);
+  var box = S[P.boxKey], NC = P.NC(), cell = P.pixelToCell(p.x, p.y, g);
+  ev.preventDefault();
+  var ctrl = ev.metaKey || ev.ctrlKey;
+  GVCore.selClick(box, cell, NC, ev.shiftKey, ctrl);
+  P.dragging = !ctrl;   // ctrl+click is a one-cell toggle, not a drag
+  recomputeAll();
+}
+function panelMouseMove(ev, P){
+  if (!P.dragging) return;
+  var g = P.getGeom(); if (!g) return;
+  var p = relpos(ev, g.cv), box = S[P.boxKey];
+  var cell = P.pixelToCell(clamp(p.x, g.R.x, g.R.x + g.R.w), clamp(p.y, g.R.y, g.R.y + g.R.h), g);
+  if (cell[0] === box.active[0] && cell[1] === box.active[1]) return;   // still same cell
+  box.active = cell.slice();                                            // extend rect from anchor
+  box.set = GVCore.selRectSet(box.anchor, box.active, P.NC());
+  scheduleRecompute();
+}
 
 function initInteraction() {
-  var m = function(){ return S.model.coords; };
-  var secCv = document.getElementById('secCanvas');
-  secCv.addEventListener('mousedown', attachDrag(function(){return secGeom;}, function (g, x0, y0, x1, y1) {
-    var c = m();
-    // pixel -> data value, then -> cell range (tested in core)
-    var monthVal = function(px){ return c.monthEdges[0] + (px - g.R.x)/g.R.w * (c.monthEdges[g.nCols] - c.monthEdges[0]); };
-    var depthVal = function(py){ return c.depthEdges[0] + (py - g.R.y)/g.R.h * (c.depthEdges[g.nRows] - c.depthEdges[0]); };
-    var mr = GVCore.cellRange(c.monthEdges, monthVal(x0), monthVal(x1));
-    var pr = GVCore.cellRange(c.depthEdges, depthVal(y0), depthVal(y1));
-    S.boxTD = { p: GVCore.idxRange(pr[0], pr[1]), m: GVCore.idxRange(mr[0], mr[1]) };
-    recomputeAll();
-  }));
-  var mapCv = document.getElementById('mapCanvas');
-  mapCv.addEventListener('mousedown', attachDrag(function(){return mapGeom;}, function (g, x0, y0, x1, y1) {
-    var c = m();
-    var lonVal = function(px){ return g.lon0 + (px - g.R.x)/g.R.w * (g.lon1 - g.lon0); };
-    var latVal = function(py){ return g.lat0 + (1 - (py - g.R.y)/g.R.h) * (g.lat1 - g.lat0); }; // lat drawn up
-    var xr = GVCore.cellRange(c.lonEdges, lonVal(x0), lonVal(x1));
-    var yr = GVCore.cellRange(c.latEdges, latVal(y0), latVal(y1));
-    S.boxLL = { x: GVCore.idxRange(xr[0], xr[1]), y: GVCore.idxRange(yr[0], yr[1]) };
-    recomputeAll();
-  }));
-  // Focus the plot on any mousedown within its panel (title, padding, or the
-  // canvas — canvas events bubble up here), so clicking around a plot switches
-  // focus without redrawing the box.
+  var secCv = document.getElementById('secCanvas'), mapCv = document.getElementById('mapCanvas');
+  var secP = { focus:'section', boxKey:'boxTD', getGeom:function(){ return secGeom; }, pixelToCell:secPixelToCell,
+    NC:function(){ return S.model.sizes.month; }, dragging:false };
+  var mapP = { focus:'map', boxKey:'boxLL', getGeom:function(){ return mapGeom; }, pixelToCell:mapPixelToCell,
+    NC:function(){ return S.model.sizes.lon; }, dragging:false };
+  secCv.addEventListener('mousedown', function(e){ panelMouseDown(e, secP); });
+  mapCv.addEventListener('mousedown', function(e){ panelMouseDown(e, mapP); });
+  document.addEventListener('mousemove', function(e){ panelMouseMove(e, secP); panelMouseMove(e, mapP); });
+  document.addEventListener('mouseup', function(){ secP.dragging = false; mapP.dragging = false; });
+  // clicking anywhere in a panel (title, padding) switches focus without editing
   secCv.parentElement.addEventListener('mousedown', function(){ setFocus('section'); });
   mapCv.parentElement.addEventListener('mousedown', function(){ setFocus('map'); });
 }
@@ -579,29 +606,27 @@ function setFocus(which) {
   document.getElementById('mapCanvas').parentElement.classList.toggle('focused', which === 'map');
 }
 
-// Arrow keys shift the focused plot's selection by one cell. Left/right wrap
-// (month on the section, longitude on the map); up/down clamp (depth, lat).
+// Arrow keys drive the focused plot's selection:
+//   plain arrow  → move the whole box one cell (columns wrap, rows clamp)
+//   shift+arrow  → grow/shrink the box from its anchor (Excel-style)
 document.addEventListener('keydown', function (e) {
   if (!S.model || !S.focus) return;
   if (e.key.indexOf('Arrow') !== 0) return;
   var ae = document.activeElement;
   if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'SELECT')) return; // don't hijack form fields
   e.preventDefault();
-  var s = S.model.sizes;
-  if (S.focus === 'section') {          // box on section = depth/month (boxTD)
-    if (e.key === 'ArrowLeft') S.boxTD.m = GVCore.shiftWrap(S.boxTD.m, -1, s.month);
-    else if (e.key === 'ArrowRight') S.boxTD.m = GVCore.shiftWrap(S.boxTD.m, 1, s.month);
-    else if (e.key === 'ArrowUp') S.boxTD.p = GVCore.shiftClamp(S.boxTD.p, -1, s.depth);
-    else if (e.key === 'ArrowDown') S.boxTD.p = GVCore.shiftClamp(S.boxTD.p, 1, s.depth);
-  } else {                              // box on map = lat/lon (boxLL)
-    if (e.key === 'ArrowLeft') S.boxLL.x = GVCore.shiftWrap(S.boxLL.x, -1, s.lon);
-    else if (e.key === 'ArrowRight') S.boxLL.x = GVCore.shiftWrap(S.boxLL.x, 1, s.lon);
-    else if (e.key === 'ArrowUp') S.boxLL.y = GVCore.shiftClamp(S.boxLL.y, 1, s.lat);   // up = north
-    else if (e.key === 'ArrowDown') S.boxLL.y = GVCore.shiftClamp(S.boxLL.y, -1, s.lat);
-  }
+  var isSec = S.focus === 'section';
+  var box = isSec ? S.boxTD : S.boxLL;
+  var NR = isSec ? S.model.sizes.depth : S.model.sizes.lat;
+  var NC = isSec ? S.model.sizes.month : S.model.sizes.lon;
+  var dr = 0, dc = 0;
+  if (e.key === 'ArrowLeft') dc = -1;
+  else if (e.key === 'ArrowRight') dc = 1;
+  else if (e.key === 'ArrowUp') dr = isSec ? -1 : 1;    // section up = shallower; map up = north
+  else if (e.key === 'ArrowDown') dr = isSec ? 1 : -1;
+  GVCore.selArrow(box, dr, dc, NR, NC, e.shiftKey);     // shift → resize; plain → move (cols wrap)
   recomputeAll();
 });
-function clampi(v,a,b){ v=Math.round(v); return v<a?a:v>b?b:v; }
 
 // ---------- conditions UI ----------
 function rebuildCondVarOptions() { renderConds(); }
