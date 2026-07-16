@@ -75,6 +75,12 @@
   <div class="grp"><label>Missing values</label>
     <div class="seg" id="missSeg"><button data-v="ignore" class="on">Ignore in mean</button><button data-v="strict">Missing if any</button></div>
   </div>
+  <div class="grp"><label for="weightSel">Averaging weights</label>
+    <select id="weightSel">
+      <option value="physical">Area / depth / month</option>
+      <option value="n_bbp" id="weightNbbp">n_bbp measurement count</option>
+    </select>
+  </div>
   <div class="grp"><label>Colour range</label>
     <div style="display:flex;gap:6px;align-items:center">
       <label class="hint"><input type="checkbox" id="autoRange" checked> auto</label>
@@ -121,6 +127,7 @@
 <script>
 "use strict";
 var MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+var DATASET_DOI = 'https://doi.org/10.5281/zenodo.19558504';
 // the 8 variables in the built-in minimal files; listed first in the variable
 // menu when a fuller file is loaded
 var CORE_VARS = ['C_200_400','C_400_800','C_800','CHLA_ADJUSTED','D_mean','flux_POC','n_bbp','POCs'];
@@ -154,6 +161,7 @@ function ramp(stops, t) {
 // ---- app state ----
 var S = {
   model: null, varName: null, cmap: 'reds', log: false, strict: false,
+  weightMode: 'physical',
   autoRange: true, linkScales: true, vmin: 0, vmax: 1,
   secLim: [0, 1], mapLim: [0, 1],  // per-panel colour limits [min,max]
   boxLL: null,  // {set,anchor,active} lat/lon cells (row=lat,col=lon) -> drives section; drawn on map
@@ -167,9 +175,10 @@ function fmtLat(v){ return (Math.abs(v)).toFixed(0) + (v>=0?'°N':'°S'); }
 function fmtLon(v){ return (Math.abs(v)).toFixed(0) + (v>=0?'°E':'°W'); }
 
 // ---------- data loading ----------
-function loadModelFromBuffer(ab, name) {
+function loadModelFromBuffer(ab, name, source) {
   try {
     var model = GVCore.parseNetCDF(ab, name);
+    model.source = source || name;
     S.model = model;
     if (!model.varNames.length) { setStatus('No 4-D variables found in ' + name); return; }
     // variable dropdown — core variables first, then the rest; each alphabetical
@@ -196,6 +205,10 @@ function loadModelFromBuffer(ab, name) {
     vs.value = S.varName;
     S.cmap = defaultCmapFor(S.varName);
     document.getElementById('cmapSel').value = S.cmap;
+    var nopt = document.getElementById('weightNbbp');
+    nopt.disabled = !model.vars.n_bbp;
+    if (nopt.disabled && S.weightMode === 'n_bbp') S.weightMode = 'physical';
+    document.getElementById('weightSel').value = S.weightMode;
     // defaults: section = whole globe; map = annual, depth bin index 1 (10-50 m)
     var nY = model.sizes.lat, nX = model.sizes.lon, nP = model.sizes.depth, nM = model.sizes.month;
     var d1 = Math.min(1, nP - 1);
@@ -220,8 +233,8 @@ function recomputeKeep() {
 function recomputeAll() {
   if (!S.model || !S.varName) return;
   var m = S.model;
-  S.secArr = GVCore.sectionReduce(m, S.varName, S.keep, S.strict, GVCore.selCells(S.boxLL.set, m.sizes.lon));
-  S.mapArr = GVCore.mapReduce(m, S.varName, S.keep, S.strict, GVCore.selCells(S.boxTD.set, m.sizes.month));
+  S.secArr = GVCore.sectionReduce(m, S.varName, S.keep, S.strict, GVCore.selCells(S.boxLL.set, m.sizes.lon), S.weightMode);
+  S.mapArr = GVCore.mapReduce(m, S.varName, S.keep, S.strict, GVCore.selCells(S.boxTD.set, m.sizes.month), S.weightMode);
   if (S.autoRange) {
     if (S.linkScales) {
       var both = new Float32Array(S.secArr.length + S.mapArr.length);
@@ -287,13 +300,103 @@ function updateTitles() {
 function numStr(v){ return (v == null || isNaN(v)) ? '' : String(Number(v.toPrecision(7))); }
 function sectionSelLabel(){ var c = S.model.coords, rc = GVCore.selRowsCols(S.boxLL.set, S.model.sizes.lon); return 'lat ' + edgeRunsLabel(rc.rows, c.latEdges, fmtLat) + '; lon ' + edgeRunsLabel(rc.cols, c.lonEdges, fmtLon); }
 function mapSelLabel(){ var rc = GVCore.selRowsCols(S.boxTD.set, S.model.sizes.month); return 'months ' + monthRunsLabel(rc.cols) + '; depth ' + depthRunsLabel(rc.rows); }
+function selectedCellMetadata(plot){
+  var m = S.model, isSection = plot === 'section', NC = isSection ? m.sizes.lon : m.sizes.month;
+  var cells = GVCore.selCells(isSection ? S.boxLL.set : S.boxTD.set, NC);
+  cells.sort(function(a,b){ return a[0]-b[0] || a[1]-b[1]; });
+  var rc = GVCore.selRowsCols(isSection ? S.boxLL.set : S.boxTD.set, NC);
+  var axes = isSection ? ['lat','lon'] : ['depth','month'], axisIdx = isSection ? { lat: rc.rows, lon: rc.cols } : { depth: rc.rows, month: rc.cols };
+  var centres = {}, bounds = {};
+  axes.forEach(function(axis){
+    centres[axis] = axisIdx[axis].map(function(i){ return m.coords[axis][i]; });
+    bounds[axis] = axisIdx[axis].map(function(i){ return [m.coords[axis + 'Edges'][i], m.coords[axis + 'Edges'][i + 1]]; });
+  });
+  return {
+    axes: axes,
+    zero_based_cell_indices: cells,
+    selected_axis_indices: axisIdx,
+    selected_axis_centres: centres,
+    selected_axis_bounds: bounds,
+    summary: isSection ? sectionSelLabel() : mapSelLabel()
+  };
+}
+function conditionMetadata(){
+  return S.conditions.map(function(c){
+    var v = S.model.vars[c.varName] || {};
+    return { variable: c.varName, long_name: v.long_name || null, units: v.units || null,
+      operator: c.op, value: c.value === '' || c.value == null ? null : +c.value,
+      value2: c.op === 'between' && c.value2 !== '' && c.value2 != null ? +c.value2 : null };
+  });
+}
+function weightingMetadata(plot, selection){
+  if (S.weightMode === 'n_bbp') return {
+    mode: 'n_bbp',
+    purpose: 'minimise measurement uncertainty due to precision',
+    formula: 'weighted arithmetic mean using n_bbp at each contributing depth-lat-lon-month cell',
+    normalisation: 'sum(value * n_bbp) / sum(n_bbp) over condition-passing cells with positive finite weights',
+    weight_variable: 'n_bbp',
+    weight_variable_metadata: S.model.vars.n_bbp ? {
+      long_name: S.model.vars.n_bbp.long_name,
+      units: S.model.vars.n_bbp.units,
+      attributes: S.model.vars.n_bbp.attrs || {}
+    } : null,
+    nonpositive_or_missing_weights: 'excluded'
+  };
+  var out = {
+    mode: 'physical',
+    purpose: 'minimise spatial and temporal sampling bias',
+    formula: plot === 'section'
+      ? 'weighted arithmetic mean by spherical grid-cell area: abs(delta_lon_radians * (sin(lat_north)-sin(lat_south)))'
+      : 'weighted arithmetic mean by depth-bin width in metres multiplied by calendar days in month',
+    normalisation: 'sum(value * weight) / sum(weight) over condition-passing cells with positive finite weights',
+    month_calendar: S.model.weights.monthCalendar
+  };
+  if (plot === 'map') {
+    out.selected_depth_bin_widths_m = selection.selected_axis_indices.depth.map(function(i){ return [i, S.model.weights.depth[i]]; });
+    out.selected_month_lengths_days = selection.selected_axis_indices.month.map(function(i){ return [i, S.model.weights.month[i]]; });
+  }
+  return out;
+}
+function resultCoordinateMetadata(plot){
+  var m = S.model, axes = plot === 'section' ? ['depth','month'] : ['lat','lon'], out = {};
+  axes.forEach(function(axis){
+    var n = m.sizes[axis], idx = [], bounds = [];
+    for (var i = 0; i < n; i++) { idx.push(m.coords[axis][i]); bounds.push([m.coords[axis + 'Edges'][i], m.coords[axis + 'Edges'][i + 1]]); }
+    out[axis] = { centres: idx, bounds: bounds, attributes: (m.coordAttrs || {})[axis] || {} };
+  });
+  return out;
+}
+function exportMetadata(plot){
+  var m = S.model, v = m.vars[S.varName], selection = selectedCellMetadata(plot);
+  return {
+    export_schema_version: 2,
+    generated_utc: new Date().toISOString(),
+    viewer: { name: 'globesink-viewer', dataset_documentation: DATASET_DOI },
+    dataset: { filename: m.filename, source: m.source || m.filename, global_attributes: m.globalAttrs || {} },
+    variable: { name: S.varName, long_name: v.long_name || null, units: v.units || null, attributes: v.attrs || {} },
+    calculation: {
+      operation: 'weighted arithmetic mean',
+      weighting: weightingMetadata(plot, selection),
+      missing_value_policy: S.strict
+        ? 'missing if any selected, condition-passing, positive-weight cell has a missing target value'
+        : 'ignore missing target values and renormalise the remaining positive weights',
+      conditions: conditionMetadata(),
+      selection: selection
+    },
+    result_coordinates: resultCoordinateMetadata(plot)
+  };
+}
 function metaComments(plot){
-  var m = S.model, u = m.vars[S.varName].units;
+  var m = S.model, u = m.vars[S.varName].units, meta = exportMetadata(plot);
   return ['# GLOBESINK viewer export',
-    '# dataset: ' + m.filename,
+    '# dataset: ' + (m.source || m.filename),
     '# variable: ' + S.varName + (u ? ' (' + u + ')' : ''),
+    '# weighting: ' + meta.calculation.weighting.formula,
+    '# missing-value policy: ' + meta.calculation.missing_value_policy,
+    '# conditions: ' + JSON.stringify(meta.calculation.conditions),
     '# averaged over: ' + (plot === 'section' ? sectionSelLabel() : mapSelLabel()),
-    '# values are averaged data in native units (blank = no data)'];
+    '# values are weighted means in native units (blank = no data)',
+    '# metadata_json: ' + JSON.stringify(meta)];
 }
 function csvSectionGrid(){
   var m = S.model, nP = m.sizes.depth, nM = m.sizes.month, c = m.coords;
@@ -323,7 +426,7 @@ function csvMapLong(){
 }
 function grid2d(arr, rows, cols){ var out = []; for (var r = 0; r < rows; r++){ var row = []; for (var k = 0; k < cols; k++){ var v = arr[r*cols+k]; row.push(isNaN(v) ? null : Number(v.toPrecision(7))); } out.push(row); } return out; }
 function jsonExport(plot){
-  var m = S.model, obj = { source: 'GLOBESINK viewer', dataset: m.filename, plot: plot, variable: S.varName,
+  var m = S.model, obj = { metadata: exportMetadata(plot), plot: plot, variable: S.varName,
     units: m.vars[S.varName].units || null, averaged_over: (plot === 'section' ? sectionSelLabel() : mapSelLabel()) };
   if (plot === 'section'){ obj.dims = ['depth','month']; obj.coords = { depth_m: Array.prototype.slice.call(m.coords.depth), month: Array.prototype.slice.call(m.coords.month) }; obj.values = grid2d(S.secArr, m.sizes.depth, m.sizes.month); }
   else { obj.dims = ['lat','lon']; obj.coords = { lat_deg: Array.prototype.slice.call(m.coords.lat), lon_deg: Array.prototype.slice.call(m.coords.lon) }; obj.values = grid2d(S.mapArr, m.sizes.lat, m.sizes.lon); }
@@ -669,7 +772,7 @@ function loadPublished(url){
   if(!url){ drawEmpty(); return; }
   setStatus('Loading ' + url.split('/').pop() + ' …');
   fetch(url).then(function(r){ if(!r.ok) throw new Error('HTTP ' + r.status); return r.arrayBuffer(); })
-    .then(function(ab){ loadModelFromBuffer(ab, url.split('/').pop()); })
+    .then(function(ab){ loadModelFromBuffer(ab, url.split('/').pop(), url); })
     .catch(function(e){ setStatus('Could not load ' + url + ': ' + e.message); drawEmpty(); });
 }
 // Reflect a user-loaded file in the dropdown (under its own group) so it's
@@ -691,7 +794,7 @@ document.getElementById('datasetSel').onchange = function(e){
 };
 document.getElementById('fileIn').onchange = function(e){
   var f = e.target.files[0]; if(!f) return; setStatus('Reading '+f.name+' …');
-  var rd = new FileReader(); rd.onload = function(){ loadModelFromBuffer(rd.result, f.name); markCustom(f.name); }; rd.readAsArrayBuffer(f);
+  var rd = new FileReader(); rd.onload = function(){ loadModelFromBuffer(rd.result, f.name, f.name); markCustom(f.name); }; rd.readAsArrayBuffer(f);
 };
 document.getElementById('varSel').onchange = function(e){
   S.varName = e.target.value;
@@ -702,6 +805,7 @@ document.getElementById('varSel').onchange = function(e){
 document.getElementById('cmapSel').onchange = function(e){ S.cmap = e.target.value; draw(); };
 document.getElementById('scaleSeg').onclick = function(e){ if(e.target.tagName!=='BUTTON')return; segSet('scaleSeg',e.target); S.log = e.target.dataset.v==='log'; recomputeAll(); };
 document.getElementById('missSeg').onclick = function(e){ if(e.target.tagName!=='BUTTON')return; segSet('missSeg',e.target); S.strict = e.target.dataset.v==='strict'; recomputeAll(); };
+document.getElementById('weightSel').onchange = function(e){ S.weightMode = e.target.value; recomputeAll(); };
 function segSet(id,btn){ document.querySelectorAll('#'+id+' button').forEach(function(b){b.classList.remove('on');}); btn.classList.add('on'); }
 document.getElementById('autoRange').onchange = function(e){ S.autoRange = e.target.checked;
   document.getElementById('vmin').disabled = e.target.checked; document.getElementById('vmax').disabled = e.target.checked;

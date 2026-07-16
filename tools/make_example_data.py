@@ -60,6 +60,7 @@ def build(lat_step, lon_step):
               'BBP700_ADJUSTED_baseline': (bbp, 'm-1', 'adjusted b_bp(700), baseline'),
               'POC': (poc, 'mg m-3', 'particulate organic carbon'),
               'POC_flux': (flux, 'mg C m-2 d-1', 'sinking POC flux'),
+              'n_bbp': (nobs, '1', 'number of backscattering measurements in bin'),
               'n_profiles': (nobs, '1', 'number of profiles in bin')}
     for k, (arr, _u, _d) in fields.items():
         a = np.broadcast_to(arr, mask.shape).astype('f4').copy()

@@ -25,6 +25,11 @@ selection stays on each panel as a thin magenta rectangle.
 - **Log / linear** colour scale.
 - **Missing-value policy:** *ignore in mean* (nan-mean) or *missing if any*
   (the average is blank if any contributing cell is missing).
+- **Averaging weights:** switch between physical coverage weighting (spherical
+  grid-cell area for the section; depth-bin width × calendar month length for
+  the map) and `n_bbp` measurement-count weighting. The former minimises
+  spatial/temporal representation bias; the latter gives greater influence to
+  bins supported by more backscattering measurements.
 - **Conditions:** include a grid cell only if it passes value tests on *other*
   variables (e.g. keep only cells where `n_profiles >= 5`, or `POC_flux` is
   between two values). Multiple conditions are combined with AND.
@@ -41,7 +46,9 @@ selection stays on each panel as a thin magenta rectangle.
   the map; up/down clamp), and **shift+arrows** grow or shrink it from the
   anchor.
 - **Export** the data behind either panel — CSV grid, CSV long/tidy, or JSON —
-  with the variable, units, and averaging selection recorded in the file.
+  with source NetCDF metadata, variable attributes, exact selected cell pairs,
+  weighting formula, missing-value policy, conditions, coordinates, and units
+  recorded in the file.
 - A top-bar link to the **full published dataset and documentation** on Zenodo.
 - **Land overlay:** a 50 m coastline (islands down to ~Kerguelen) is drawn over
   the map, masking the data under land.
@@ -113,6 +120,20 @@ test/                   headless tests (see below)
 The reduction math lives in `src/core.js`, deliberately free of any DOM code so
 it can be tested headlessly and reused.
 
+### Averaging definitions
+
+All displayed averages are weighted arithmetic means. With **Area / depth /
+month** selected, latitude/longitude cells are weighted by their exact relative
+area on a sphere,
+`|Δlongitude × (sin(latitude north) − sin(latitude south))|`; selected depth
+bins are weighted by bin width; and months are weighted by days in a standard
+non-leap calendar. Only weights for dimensions being collapsed affect a panel.
+
+With **n_bbp measurement count** selected, each contributing 4-D cell is
+weighted by its `n_bbp` value. Missing, non-finite, and non-positive weights are
+excluded. This option is disabled for a user-supplied file that has no `n_bbp`
+variable.
+
 ## Tests
 
 `test/run.sh` verifies the core against numpy and smoke-tests the whole app,
@@ -122,11 +143,11 @@ using macOS's built-in JavaScriptCore (no Node required):
 test/run.sh
 ```
 
-It (1) checks every reducer — default and boxed section/map, the strict
-missing-value policy, the drag-box index math, and cross-variable conditions —
-against `numpy`/`xarray` values to ~1e-6, and (2) runs the full `index.html`
-wiring against a stubbed DOM/Canvas to catch runtime errors. Rendering itself
-(pixels, drag interactions) is verified in a real browser.
+It (1) checks physical and `n_bbp` weighted reducers — default and boxed
+section/map, the strict missing-value policy, the drag-box index math, and
+cross-variable conditions — against `numpy` values to ~1e-6, and (2) runs the
+full `index.html` wiring against a stubbed DOM/Canvas to catch runtime errors.
+Rendering itself (pixels, drag interactions) is verified in a real browser.
 
 ## Coastline data
 

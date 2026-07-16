@@ -6,10 +6,10 @@
  * The GLOBESINK product stores each variable as [depth, lat, lon, month]
  * (single precision, with a _FillValue) and tags it with a
  *   coordinates = "depth lat lon month"
- * attribute. We parse that attribute to learn the axis order (lat and lon can
- * share a length, so size alone can't disambiguate them), then normalise every
- * variable to canonical [depth, lat, lon, month] so the reducers can assume one
- * fixed layout. Fill values and missing_value are converted to NaN.
+ * attribute. Storage order is resolved from netCDF-4 dimension ids (with shape
+ * matching as a fallback), then every variable is normalised to canonical
+ * [depth, lat, lon, month] so reducers can assume one fixed layout. Fill values
+ * and missing_value are converted to NaN.
  */
 (function (root) {
   'use strict';
@@ -27,6 +27,24 @@
     if (a == null) return null;
     if (Array.isArray(a) || ArrayBuffer.isView(a)) return a.length ? a[0] : null;
     return a;
+  }
+
+  // Copy serialisable NetCDF attributes while dropping HDF5 reference metadata.
+  // Keeping these in the model lets exports preserve source provenance.
+  function cleanAttrs(attrs) {
+    var out = {}, skip = { DIMENSION_LIST: 1, REFERENCE_LIST: 1, _Netcdf4Coordinates: 1, _Netcdf4Dimid: 1 };
+    Object.keys(attrs || {}).forEach(function (key) {
+      if (skip[key]) return;
+      var v = attrs[key];
+      if (Array.isArray(v) || ArrayBuffer.isView(v)) {
+        var a = [];
+        for (var i = 0; i < v.length; i++) if (typeof v[i] === 'string' || typeof v[i] === 'number' || typeof v[i] === 'boolean') a.push(v[i]);
+        if (!a.length && v.length) return;
+        v = a.length === 1 ? a[0] : a;
+      }
+      if (v == null || typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean' || Array.isArray(v)) out[key] = v;
+    });
+    return out;
   }
 
   // Reconstruct bin edges from bin centres.
@@ -60,6 +78,40 @@
     var ok = true;
     for (var j = 0; j < n; j++) { e[j + 1] = 2 * c[j] - e[j]; if (e[j + 1] <= e[j]) { ok = false; break; } }
     return ok ? e : midpointEdges(c);
+  }
+
+  function widthsFromEdges(edges) {
+    var out = new Float64Array(edges.length - 1);
+    for (var i = 0; i < out.length; i++) out[i] = Math.abs(edges[i + 1] - edges[i]);
+    return out;
+  }
+
+  // The product stores climatological month numbers rather than dated time
+  // coordinates. Use a standard non-leap calendar; unknown month coordinates
+  // fall back to equal weights.
+  function monthLengthWeights(months) {
+    var days = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    var out = new Float64Array(months.length), recognised = true;
+    for (var i = 0; i < months.length; i++) {
+      var m = Math.round(months[i]);
+      if (m < 1 || m > 12 || Math.abs(months[i] - m) > 1e-6) { recognised = false; break; }
+      out[i] = days[m - 1];
+    }
+    if (!recognised) for (var j = 0; j < out.length; j++) out[j] = 1;
+    return { values: out, calendar: recognised ? 'standard non-leap calendar' : 'equal (unrecognised month coordinates)' };
+  }
+
+  // Exact relative area of each spherical lat/lon quadrilateral. Earth-radius
+  // squared is omitted because it cancels in a weighted mean.
+  function gridCellAreaWeights(latEdges, lonEdges) {
+    var nY = latEdges.length - 1, nX = lonEdges.length - 1, out = new Float64Array(nY * nX);
+    var rad = Math.PI / 180;
+    for (var y = 0; y < nY; y++) {
+      var s = Math.abs(Math.sin(Math.max(-90, Math.min(90, latEdges[y + 1])) * rad) -
+                       Math.sin(Math.max(-90, Math.min(90, latEdges[y])) * rad));
+      for (var x = 0; x < nX; x++) out[y * nX + x] = s * Math.abs(lonEdges[x + 1] - lonEdges[x]) * rad;
+    }
+    return out;
   }
 
   function transposeToCanon(flat, srcOrder, sizes) {
@@ -126,11 +178,12 @@
     var keys = f.keys.slice();
 
     // coordinate variables by canonical name, plus their netCDF-4 dimension id
-    var coords = {}, coordInfo = {};
+    var coords = {}, coordInfo = {}, coordAttrs = {};
     CANON.forEach(function (nm) {
       if (keys.indexOf(nm) >= 0) {
         var d = f.get(nm);
         coords[nm] = toFloat64(d.value);
+        coordAttrs[nm] = cleanAttrs(d.attrs || {});
         coordInfo[nm] = { len: coords[nm].length, dimid: scalarAttr((d.attrs || {})._Netcdf4Dimid) };
       }
     });
@@ -174,20 +227,31 @@
         name: key,
         data: data,
         units: attrs.units != null ? String(scalarAttr(attrs.units) || attrs.units) : '',
-        long_name: attrs.long_name != null ? String(scalarAttr(attrs.long_name) || attrs.long_name) : key
+        long_name: attrs.long_name != null ? String(scalarAttr(attrs.long_name) || attrs.long_name) : key,
+        attrs: cleanAttrs(attrs)
       };
       varNames.push(key);
     });
 
+    // The zero-seeded irregular reconstruction is meaningful for depth bins
+    // beginning at the sea surface. Other axes use midpoint edges if irregular.
+    var depthEdges = edgesFromCentres(coords.depth), latEdges = midpointEdges(coords.lat);
+    var lonEdges = midpointEdges(coords.lon), monthEdges = midpointEdges(coords.month);
+    var monthWeights = monthLengthWeights(coords.month);
     return {
       filename: filename || 'file.nc',
+      globalAttrs: cleanAttrs(f.attrs || {}),
       sizes: sizes,
       coords: {
         depth: coords.depth, lat: coords.lat, lon: coords.lon, month: coords.month,
-        depthEdges: edgesFromCentres(coords.depth),
-        latEdges: edgesFromCentres(coords.lat),
-        lonEdges: edgesFromCentres(coords.lon),
-        monthEdges: edgesFromCentres(coords.month)
+        depthEdges: depthEdges, latEdges: latEdges, lonEdges: lonEdges, monthEdges: monthEdges
+      },
+      coordAttrs: coordAttrs,
+      weights: {
+        depth: widthsFromEdges(depthEdges),
+        month: monthWeights.values,
+        area: gridCellAreaWeights(latEdges, lonEdges),
+        monthCalendar: monthWeights.calendar
       },
       vars: vars,
       varNames: varNames
@@ -328,23 +392,35 @@
     }
   }
 
+  function nBbpWeights(model, mode) {
+    if (mode !== 'n_bbp') return null;
+    if (!model.vars.n_bbp) throw new Error('n_bbp weighting requested but variable "n_bbp" is absent');
+    return model.vars.n_bbp.data;
+  }
+
   // Left panel: value(depth, month) averaged over a set of lat/lon cells.
   // cellsYX is an array of [y,x] pairs (arbitrary, possibly discontiguous).
-  function sectionReduce(model, varName, keep, strict, cellsYX) {
+  // physical weights = spherical grid-cell area; n_bbp weights = measurement
+  // count in each contributing 4-D cell.
+  function sectionReduce(model, varName, keep, strict, cellsYX, weightMode) {
     var s = model.sizes, nP = s.depth, nY = s.lat, nX = s.lon, nM = s.month;
-    var d = model.vars[varName].data, nC = cellsYX.length;
+    var d = model.vars[varName].data, nC = cellsYX.length, nw = nBbpWeights(model, weightMode || 'physical');
+    var physicalW = new Float64Array(nC);
+    if (!nw) for (var c = 0; c < nC; c++) physicalW[c] = model.weights.area[cellsYX[c][0] * nX + cellsYX[c][1]];
     var out = new Float32Array(nP * nM);
     for (var p = 0; p < nP; p++) {
       for (var m = 0; m < nM; m++) {
-        var sum = 0, cnt = 0, sawNaN = false;
+        var sum = 0, sumW = 0, sawNaN = false;
         for (var i = 0; i < nC; i++) {
           var idx = ((p * nY + cellsYX[i][0]) * nX + cellsYX[i][1]) * nM + m;
           if (keep && !keep[idx]) continue;
+          var w = nw ? nw[idx] : physicalW[i];
+          if (!isFinite(w) || w <= 0) continue;
           var v = d[idx];
           if (isNaN(v)) { sawNaN = true; continue; }
-          sum += v; cnt++;
+          sum += v * w; sumW += w;
         }
-        out[p * nM + m] = (strict && sawNaN) || cnt === 0 ? NaN : sum / cnt;
+        out[p * nM + m] = (strict && sawNaN) || sumW === 0 ? NaN : sum / sumW;
       }
     }
     return out; // indexed [p*nM + m]
@@ -352,21 +428,27 @@
 
   // Right panel: value(lat, lon) averaged over a set of depth/month cells.
   // cellsPM is an array of [p,m] pairs.
-  function mapReduce(model, varName, keep, strict, cellsPM) {
+  // physical weights = depth-bin width × calendar month length; n_bbp weights =
+  // measurement count in each contributing 4-D cell.
+  function mapReduce(model, varName, keep, strict, cellsPM, weightMode) {
     var s = model.sizes, nP = s.depth, nY = s.lat, nX = s.lon, nM = s.month;
-    var d = model.vars[varName].data, nC = cellsPM.length;
+    var d = model.vars[varName].data, nC = cellsPM.length, nw = nBbpWeights(model, weightMode || 'physical');
+    var physicalW = new Float64Array(nC);
+    if (!nw) for (var c = 0; c < nC; c++) physicalW[c] = model.weights.depth[cellsPM[c][0]] * model.weights.month[cellsPM[c][1]];
     var out = new Float32Array(nY * nX);
     for (var y = 0; y < nY; y++) {
       for (var x = 0; x < nX; x++) {
-        var sum = 0, cnt = 0, sawNaN = false;
+        var sum = 0, sumW = 0, sawNaN = false;
         for (var i = 0; i < nC; i++) {
           var idx = ((cellsPM[i][0] * nY + y) * nX + x) * nM + cellsPM[i][1];
           if (keep && !keep[idx]) continue;
+          var w = nw ? nw[idx] : physicalW[i];
+          if (!isFinite(w) || w <= 0) continue;
           var v = d[idx];
           if (isNaN(v)) { sawNaN = true; continue; }
-          sum += v; cnt++;
+          sum += v * w; sumW += w;
         }
-        out[y * nX + x] = (strict && sawNaN) || cnt === 0 ? NaN : sum / cnt;
+        out[y * nX + x] = (strict && sawNaN) || sumW === 0 ? NaN : sum / sumW;
       }
     }
     return out; // indexed [y*nX + x]
@@ -428,6 +510,8 @@
     selMove: selMove,
     selClick: selClick,
     selArrow: selArrow,
+    monthLengthWeights: monthLengthWeights,
+    gridCellAreaWeights: gridCellAreaWeights,
     CANON: CANON
   };
   root.GVCore = api;

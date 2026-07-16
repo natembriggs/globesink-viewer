@@ -96,6 +96,7 @@ try {
   var rcTD = GVCore.selRowsCols(S.boxTD.set, S.model.sizes.month);
   chk('boxTD default depth bin 1', rcTD.rows.length === 1 && rcTD.rows[0] === 1);
   chk('boxTD default annual', rcTD.cols.length === S.model.sizes.month && rcTD.cols[0] === 0);
+  chk('physical weighting default', S.weightMode === 'physical');
   chk('vmax > vmin (autorange)', S.vmax > S.vmin);
   chk('varSel option count', document.getElementById('varSel')._optCount === undefined || true);
 
@@ -104,6 +105,9 @@ try {
   S.strict = true; recomputeAll(); chk('strict recompute ok', S.secArr.length > 0);
   S.conditions = [{ varName: 'n_profiles', op: '>=', value: 40 }]; recomputeKeep(); recomputeAll();
   chk('conditioned recompute ok', S.keep != null && S.secArr.length > 0);
+  S.weightMode = 'n_bbp'; recomputeAll();
+  chk('n_bbp weighted recompute ok', S.secArr.length > 0 && S.mapArr.length > 0);
+  S.weightMode = 'physical'; recomputeAll();
   // simulate a section drag -> rectangle depth 0..2 x months 3..7
   var nMx = S.model.sizes.month;
   S.boxTD = { anchor: [0, 3], active: [2, 7], set: GVCore.selRectSet([0, 3], [2, 7], nMx) }; recomputeAll();
@@ -128,11 +132,15 @@ try {
   // data export generators (pure string builders)
   var secCsv = G.csvSectionGrid();
   chk('section CSV grid header', secCsv.indexOf('depth_m,Jan,') >= 0);
+  chk('CSV records weighting', secCsv.indexOf('# weighting: weighted arithmetic mean by spherical grid-cell area') >= 0);
+  chk('CSV embeds full metadata', secCsv.indexOf('# metadata_json: {') >= 0);
   chk('section CSV grid row count', secCsv.trim().split('\n').filter(function (l) { return l[0] !== '#'; }).length === 1 + S.model.sizes.depth);
   var mapLong = G.csvMapLong().trim().split('\n').filter(function (l) { return l[0] !== '#' && l.indexOf('lon_deg') !== 0; });
   chk('map CSV long row count', mapLong.length === S.model.sizes.lat * S.model.sizes.lon);
   var js = JSON.parse(G.jsonExport('section'));
   chk('json section shape', js.dims[0] === 'depth' && js.values.length === S.model.sizes.depth && js.values[0].length === S.model.sizes.month);
+  chk('json calculation metadata', js.metadata.calculation.weighting.mode === 'physical' && js.metadata.calculation.selection.zero_based_cell_indices.length > 0);
+  chk('json source metadata', js.metadata.variable.long_name && js.metadata.dataset.global_attributes.title);
 } catch (e) {
   print('FAIL runtime: ' + e + (e.stack ? '\n' + e.stack : ''));
   fail++;
