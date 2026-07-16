@@ -155,11 +155,15 @@ using macOS's built-in JavaScriptCore (no Node required):
 test/run.sh
 ```
 
-It (1) checks physical and `n_bbp` weighted reducers — default and boxed
-section/map, the strict missing-value policy, the drag-box index math, and
-cross-variable conditions — against `numpy` values to ~1e-6, and (2) runs the
-full `index.html` wiring against a stubbed DOM/Canvas to catch runtime errors.
-Rendering itself (pixels, drag interactions) is verified in a real browser.
+It (1) checks physical and `n_bbp` weighted reducers, the marginal-profile
+collapses (including the discontiguous-selection union rule), the Excel-like
+selection edit logic (click/shift/ctrl/arrow), the panel-shrink layout math,
+and cross-variable conditions — against `numpy` values or hand-derived cases —
+and (2) runs the full `index.html` wiring (including all four marginal
+profiles, both weighting modes, and linked/unlinked scales) against a stubbed
+DOM/Canvas to catch runtime errors. Currently 60 core checks + 44 wiring
+checks, all passing. Rendering itself (pixels, drag interactions, visual
+alignment of the marginal panels) can only be verified in a real browser.
 
 ## Coastline data
 
@@ -176,6 +180,42 @@ are normally missing over land in the ocean product anyway).
   slow, parsing could move to a Web Worker.
 - The land overlay masks the map visually; excluding land cells from the
   section/box averages too would require rasterising the coastline to the grid.
+
+## Status as of 2026-07-16 (marginal-profile-panels review)
+
+The marginal profile panels (commit `1a99741`) and weighted averaging /
+export provenance (commit `0be6996`) were reviewed line-by-line against the
+original feature request rather than just trusting that the tests pass.
+Verified precisely: the 2/3-shrink with bottom-left corner preserved; x-axis
+alignment of the top profile with the main panel and y-axis alignment of the
+side profile; the discontiguous-selection union rule (all months/longitudes
+plotted against the *union* of selected depth/latitude rows, not a per-column
+subset); log/linear and colour-range following on the profile value axis;
+"link panels" governing all six panels; unlinked auto-range always including
+each marginal's plotted min/max; and marginal data correctly excluded from
+CSV/JSON export. All 104 automated checks (60 core + 44 wiring) pass.
+
+Two judgment calls made by the implementation, not literally specified in the
+request — worth a quick visual confirmation, not necessarily bugs:
+
+- **Blank top-right corner.** With both a top and side profile enabled, the
+  small rectangle above the side panel / right of the top panel (1/9 of the
+  original panel area) is left empty, matching the common statistical
+  "jointplot" convention. Neither panel was asked to cover it.
+- **Linked scale also stretches to fit marginal extrema.** The request only
+  specified that *unlinked* marginal panels must show their full min/max; the
+  implementation also expands the *linked* shared scale so a marginal line
+  never clips off-panel, rather than letting the heatmaps' robust
+  (2nd–98th-percentile) range silently cut off a profile's endpoints. This
+  seemed like the safer choice (a clipped line reads as broken), but it means
+  a single outlier in a marginal profile can slightly widen the shared colour
+  scale even when linked.
+
+**Not yet verified in a real browser** (this session had no way to render
+pixels or drive the mouse): the visual layout of the four marginal panels,
+whether the axis tick labels/notes are legible at typical window widths, and
+the feel of drag/shift/ctrl interactions with the profiles turned on. Worth a
+look before considering this feature fully done.
 
 ## License
 
