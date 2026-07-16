@@ -81,10 +81,16 @@
       <option value="n_bbp" id="weightNbbp">n_bbp measurement count</option>
     </select>
   </div>
+  <div class="grp"><label>Marginal panels</label>
+    <div style="display:flex;gap:8px;align-items:center">
+      <label class="hint" title="Show monthly mean and depth profile around the time × depth section"><input type="checkbox" id="secProfiles"> section</label>
+      <label class="hint" title="Show longitude and latitude profiles around the map"><input type="checkbox" id="mapProfiles"> map</label>
+    </div>
+  </div>
   <div class="grp"><label>Colour range</label>
     <div style="display:flex;gap:6px;align-items:center">
       <label class="hint"><input type="checkbox" id="autoRange" checked> auto</label>
-      <label class="hint" title="Link left/right colour scales, or auto-scale each panel independently"><input type="checkbox" id="linkScales" checked> link L/R</label>
+      <label class="hint" title="Use one value scale for every visible heatmap and marginal panel"><input type="checkbox" id="linkScales" checked> link panels</label>
       <input type="number" id="vmin" class="range-in" step="any" disabled>
       <input type="number" id="vmax" class="range-in" step="any" disabled>
     </div>
@@ -162,13 +168,16 @@ function ramp(stops, t) {
 var S = {
   model: null, varName: null, cmap: 'reds', log: false, strict: false,
   weightMode: 'physical',
+  secProfiles: false, mapProfiles: false,
   autoRange: true, linkScales: true, vmin: 0, vmax: 1,
-  secLim: [0, 1], mapLim: [0, 1],  // per-panel colour limits [min,max]
+  secLim: [0, 1], mapLim: [0, 1],
+  secMonthLim: [0, 1], secDepthLim: [0, 1], mapLonLim: [0, 1], mapLatLim: [0, 1],
   boxLL: null,  // {set,anchor,active} lat/lon cells (row=lat,col=lon) -> drives section; drawn on map
   boxTD: null,  // {set,anchor,active} depth/month cells (row=depth,col=month) -> drives map; drawn on section
   focus: null,  // 'section' | 'map' — last-clicked plot; receives arrow keys
   conditions: [], keep: null,
-  secArr: null, mapArr: null
+  secArr: null, mapArr: null, secWeight: null, mapWeight: null,
+  secMonthArr: null, secDepthArr: null, mapLonArr: null, mapLatArr: null
 };
 
 function fmtLat(v){ return (Math.abs(v)).toFixed(0) + (v>=0?'°N':'°S'); }
@@ -232,18 +241,31 @@ function recomputeKeep() {
 }
 function recomputeAll() {
   if (!S.model || !S.varName) return;
-  var m = S.model;
-  S.secArr = GVCore.sectionReduce(m, S.varName, S.keep, S.strict, GVCore.selCells(S.boxLL.set, m.sizes.lon), S.weightMode);
-  S.mapArr = GVCore.mapReduce(m, S.varName, S.keep, S.strict, GVCore.selCells(S.boxTD.set, m.sizes.month), S.weightMode);
+  var m = S.model, s = m.sizes;
+  S.secWeight = S.secProfiles ? new Float64Array(s.depth * s.month) : null;
+  S.mapWeight = S.mapProfiles ? new Float64Array(s.lat * s.lon) : null;
+  S.secArr = GVCore.sectionReduce(m, S.varName, S.keep, S.strict,
+    GVCore.selCells(S.boxLL.set, s.lon), S.weightMode, S.secWeight);
+  S.mapArr = GVCore.mapReduce(m, S.varName, S.keep, S.strict,
+    GVCore.selCells(S.boxTD.set, s.month), S.weightMode, S.mapWeight);
+  recomputeProfiles();
   if (S.autoRange) {
     if (S.linkScales) {
-      var both = new Float32Array(S.secArr.length + S.mapArr.length);
-      both.set(S.secArr, 0); both.set(S.mapArr, S.secArr.length);
-      var lim = GVCore.robustLimits(both, 0.02, 0.98, S.log);
-      S.secLim = lim; S.mapLim = lim.slice();
+      var arrays = [S.secArr, S.mapArr];
+      if (S.secProfiles) arrays.push(S.secMonthArr, S.secDepthArr);
+      if (S.mapProfiles) arrays.push(S.mapLonArr, S.mapLatArr);
+      var all = concatArrays(arrays), lim = GVCore.robustLimits(all, 0.02, 0.98, S.log);
+      // Robust limits remain useful for the heatmaps, but every linked marginal
+      // must remain fully visible.
+      arrays.slice(2).forEach(function(a){ lim = includeArrayLimits(lim, a, S.log); });
+      setAllLimits(safeLimits(lim, S.log));
     } else {
-      S.secLim = GVCore.robustLimits(S.secArr, 0.02, 0.98, S.log);
-      S.mapLim = GVCore.robustLimits(S.mapArr, 0.02, 0.98, S.log);
+      S.secLim = safeLimits(GVCore.robustLimits(S.secArr, 0.02, 0.98, S.log), S.log);
+      S.mapLim = safeLimits(GVCore.robustLimits(S.mapArr, 0.02, 0.98, S.log), S.log);
+      S.secMonthLim = fullArrayLimits(S.secMonthArr, S.log);
+      S.secDepthLim = fullArrayLimits(S.secDepthArr, S.log);
+      S.mapLonLim = fullArrayLimits(S.mapLonArr, S.log);
+      S.mapLatLim = fullArrayLimits(S.mapLatArr, S.log);
     }
     // the min/max boxes echo the map panel's range (the one usually tuned for
     // deep, low-signal views); with scales linked the panels share it anyway.
@@ -252,10 +274,84 @@ function recomputeAll() {
     document.getElementById('vmin').value = fmtNum(S.vmin);
     document.getElementById('vmax').value = fmtNum(S.vmax);
   } else {
-    S.secLim = [S.vmin, S.vmax]; S.mapLim = [S.vmin, S.vmax];
+    setAllLimits([S.vmin, S.vmax]);
   }
   updateTitles();
   draw();
+}
+function scaledWeights(base, nRows, nCols, rowFactor, colFactor, cellFactor) {
+  var out = new Float64Array(nRows * nCols);
+  for (var r = 0; r < nRows; r++) for (var c = 0; c < nCols; c++) {
+    var i = r * nCols + c, w = base[i];
+    if (rowFactor) w *= rowFactor[r];
+    if (colFactor) w *= colFactor[c];
+    if (cellFactor) w *= cellFactor[i];
+    out[i] = w;
+  }
+  return out;
+}
+function recomputeProfiles() {
+  var m = S.model, s = m.sizes;
+  if (S.secProfiles) {
+    var td = GVCore.selRowsCols(S.boxTD.set, s.month);
+    var topW = S.weightMode === 'physical' ? scaledWeights(S.secWeight, s.depth, s.month, m.weights.depth, null, null) : S.secWeight;
+    var sideW = S.weightMode === 'physical' ? scaledWeights(S.secWeight, s.depth, s.month, null, m.weights.month, null) : S.secWeight;
+    // For a discontiguous selection, use the union of every selected depth row
+    // for all months, and the union of every selected month column for all depths.
+    S.secMonthArr = GVCore.marginalOverRows(S.secArr, s.depth, s.month, td.rows, topW);
+    S.secDepthArr = GVCore.marginalOverCols(S.secArr, s.depth, s.month, td.cols, sideW);
+  } else { S.secMonthArr = S.secDepthArr = null; }
+  if (S.mapProfiles) {
+    var ll = GVCore.selRowsCols(S.boxLL.set, s.lon);
+    var mapW = S.weightMode === 'physical' ? scaledWeights(S.mapWeight, s.lat, s.lon, null, null, m.weights.area) : S.mapWeight;
+    S.mapLonArr = GVCore.marginalOverRows(S.mapArr, s.lat, s.lon, ll.rows, mapW);
+    S.mapLatArr = GVCore.marginalOverCols(S.mapArr, s.lat, s.lon, ll.cols, mapW);
+  } else { S.mapLonArr = S.mapLatArr = null; }
+}
+function concatArrays(arrays) {
+  var n = 0; arrays.forEach(function(a){ if(a) n += a.length; });
+  var out = new Float32Array(n), at = 0;
+  arrays.forEach(function(a){ if(a){ out.set(a, at); at += a.length; } });
+  return out;
+}
+function rawArrayLimits(arr, positiveOnly) {
+  if (!arr) return null;
+  var lo = Infinity, hi = -Infinity;
+  for (var i = 0; i < arr.length; i++) {
+    var v = arr[i];
+    if (!isNaN(v) && (!positiveOnly || v > 0)) { if (v < lo) lo = v; if (v > hi) hi = v; }
+  }
+  return lo === Infinity ? null : [lo, hi];
+}
+function fullArrayLimits(arr, positiveOnly) {
+  var lim = rawArrayLimits(arr, positiveOnly);
+  if (!lim) return positiveOnly ? [1, 10] : [0, 1];
+  var lo = lim[0], hi = lim[1];
+  if (lo === hi) {
+    if (positiveOnly) { lo /= Math.sqrt(10); hi *= Math.sqrt(10); }
+    else { var d = Math.abs(lo) * 0.05 || 1; lo -= d; hi += d; }
+  } else if (positiveOnly) {
+    var ratio = Math.pow(hi / lo, 0.03); lo /= ratio; hi *= ratio;
+  } else {
+    var pad = (hi - lo) * 0.03; lo -= pad; hi += pad;
+  }
+  return [lo, hi];
+}
+function includeArrayLimits(lim, arr, positiveOnly) {
+  var ext = rawArrayLimits(arr, positiveOnly);
+  if (!ext) return lim;
+  var lo = positiveOnly && !(lim[0] > 0) ? ext[0] : Math.min(lim[0], ext[0]);
+  return [lo, Math.max(lim[1], ext[1])];
+}
+function safeLimits(lim, positiveOnly) {
+  if (positiveOnly && (!(lim[0] > 0) || !(lim[1] > lim[0]))) return [1, 10];
+  if (!positiveOnly && !(lim[1] > lim[0])) return fullArrayLimits(new Float32Array([lim[0]]), false);
+  return lim;
+}
+function setAllLimits(lim) {
+  S.secLim = lim.slice(); S.mapLim = lim.slice();
+  S.secMonthLim = lim.slice(); S.secDepthLim = lim.slice();
+  S.mapLonLim = lim.slice(); S.mapLatLim = lim.slice();
 }
 function fmtNum(v){ var a=Math.abs(v); return a && (a<1e-3||a>=1e5) ? v.toExponential(2) : (+v.toPrecision(4)).toString(); }
 
@@ -458,6 +554,15 @@ function setupCanvas(cv, cssW, cssH) {
 function plotRect(cssW, cssH) {
   return { x: MARG.l, y: MARG.t, w: cssW - MARG.l - MARG.r, h: cssH - MARG.t - MARG.b };
 }
+function panelRects(R, profilesOn) {
+  if (!profilesOn) return { main:R, top:null, side:null };
+  var w = R.w * 2 / 3, h = R.h * 2 / 3;
+  return {
+    main: { x:R.x, y:R.y + R.h - h, w:w, h:h },
+    top:  { x:R.x, y:R.y, w:w, h:R.h - h },
+    side: { x:R.x + w, y:R.y + R.h - h, w:R.w - w, h:h }
+  };
+}
 
 function drawCells(ctx, R, cols, rows, xEdgePix, yEdgePix, valueAt, lim) {
   for (var r = 0; r < rows; r++) {
@@ -475,6 +580,45 @@ function drawCells(ctx, R, cols, rows, xEdgePix, yEdgePix, valueAt, lim) {
 }
 function axisStyle(ctx){ ctx.fillStyle='#333'; ctx.strokeStyle='#888'; ctx.font='11px sans-serif'; ctx.lineWidth=1; }
 function frame(ctx,R){ ctx.strokeStyle='#333'; ctx.lineWidth=1; ctx.strokeRect(R.x+.5,R.y+.5,R.w,R.h); }
+function valueAtFrac(lim, frac) {
+  return S.log ? Math.exp(Math.log(lim[0]) + frac * (Math.log(lim[1]) - Math.log(lim[0]))) :
+    lim[0] + frac * (lim[1] - lim[0]);
+}
+function drawProfilePath(ctx, values, posAt, valuePix, R) {
+  ctx.save(); ctx.beginPath(); ctx.rect(R.x, R.y, R.w, R.h); ctx.clip();
+  ctx.beginPath(); ctx.strokeStyle = selColor(1); ctx.lineWidth = 2; ctx.lineJoin = 'round';
+  var started = false;
+  for (var i = 0; i < values.length; i++) {
+    var v = values[i], vp = valuePix(v);
+    if (isNaN(vp)) { started = false; continue; }
+    var p = posAt(i);
+    if (started) ctx.lineTo(p[0], p[1] == null ? vp : p[1]);
+    else { ctx.moveTo(p[0], p[1] == null ? vp : p[1]); started = true; }
+  }
+  ctx.stroke(); ctx.restore();
+}
+function drawTopProfile(ctx, R, values, xCenter, lim, note) {
+  frame(ctx, R); axisStyle(ctx);
+  var yPix = function(v){ var t = norm(v, lim[0], lim[1]); return isNaN(t) ? NaN : R.y + (1 - t) * R.h; };
+  drawProfilePath(ctx, values, function(i){ return [xCenter(i), null]; }, yPix, R);
+  ctx.textAlign='right'; ctx.textBaseline='middle';
+  [0,0.5,1].forEach(function(f){ var yy=R.y+(1-f)*R.h; ctx.beginPath();ctx.moveTo(R.x-3,yy);ctx.lineTo(R.x,yy);ctx.stroke();ctx.fillText(fmtNum(valueAtFrac(lim,f)),R.x-5,yy); });
+  ctx.save(); ctx.translate(11,R.y+R.h/2); ctx.rotate(-Math.PI/2); ctx.textAlign='center'; ctx.textBaseline='middle'; ctx.font='10px sans-serif'; ctx.fillText(S.varName,0,0); ctx.restore();
+  ctx.fillStyle='#6a7078'; ctx.font='9px sans-serif'; ctx.textAlign='left'; ctx.textBaseline='top'; ctx.fillText(note,R.x+4,R.y+3);
+}
+function drawSideProfile(ctx, R, values, yCenter, lim, note) {
+  frame(ctx, R); axisStyle(ctx);
+  var xPix = function(v){ var t = norm(v, lim[0], lim[1]); return isNaN(t) ? NaN : R.x + t * R.w; };
+  ctx.save(); ctx.beginPath(); ctx.rect(R.x,R.y,R.w,R.h); ctx.clip();
+  ctx.beginPath(); ctx.strokeStyle=selColor(1); ctx.lineWidth=2; ctx.lineJoin='round';
+  var started=false;
+  for(var i=0;i<values.length;i++){ var xx=xPix(values[i]); if(isNaN(xx)){started=false;continue;} var yy=yCenter(i); if(started)ctx.lineTo(xx,yy);else{ctx.moveTo(xx,yy);started=true;} }
+  ctx.stroke(); ctx.restore();
+  ctx.textAlign='center'; ctx.textBaseline='top';
+  [0.08,0.5,0.92].forEach(function(f){ var xx=R.x+f*R.w; ctx.beginPath();ctx.moveTo(xx,R.y+R.h);ctx.lineTo(xx,R.y+R.h+3);ctx.stroke();ctx.fillText(fmtNum(valueAtFrac(lim,f)),xx,R.y+R.h+5); });
+  ctx.font='9px sans-serif'; ctx.fillStyle='#333'; ctx.fillText(S.varName,R.x+R.w/2,R.y+R.h+18);
+  ctx.fillStyle='#6a7078'; ctx.font='9px sans-serif'; ctx.textAlign='left'; ctx.textBaseline='top'; ctx.fillText(note,R.x+4,R.y+3);
+}
 
 function drawColorbar(ctx, cssW, R, label, lim) {
   var bw = 14, bx = cssW - MARG.r + 16, by = R.y, bh = R.h;
@@ -576,7 +720,7 @@ var secGeom = null;
 function drawSection() {
   var cv = document.getElementById('secCanvas');
   var cssW = cv.parentElement.clientWidth, cssH = Math.max(300, Math.round(cssW * 0.72));
-  var ctx = setupCanvas(cv, cssW, cssH), R = plotRect(cssW, cssH);
+  var ctx = setupCanvas(cv, cssW, cssH), parts = panelRects(plotRect(cssW, cssH), S.secProfiles), R = parts.main;
   var m = S.model, nP = m.sizes.depth, nM = m.sizes.month;
   var dTop = m.coords.depthEdges[0], dBot = m.coords.depthEdges[nP];
   var xEdgePix = function (c) { return R.x + (c / nM) * R.w; };
@@ -592,6 +736,10 @@ function drawSection() {
   dticks.forEach(function(dv){ if(dv>=dTop&&dv<=dBot){ var yy=R.y+((dv-dTop)/(dBot-dTop))*R.h; ctx.beginPath();ctx.moveTo(R.x-3,yy);ctx.lineTo(R.x,yy);ctx.stroke(); ctx.fillText(dv, R.x-6, yy);} });
   ctx.save(); ctx.translate(14, R.y+R.h/2); ctx.rotate(-Math.PI/2); ctx.textAlign='center'; ctx.textBaseline='middle'; ctx.fillText('depth (m)',0,0); ctx.restore();
   drawColorbar(ctx, cssW, R, varLabel(), S.secLim);
+  if (S.secProfiles) {
+    drawTopProfile(ctx, parts.top, S.secMonthArr, function(i){ return (xEdgePix(i)+xEdgePix(i+1))/2; }, S.secMonthLim, 'selected-depth mean');
+    drawSideProfile(ctx, parts.side, S.secDepthArr, function(i){ return (yEdgePix(i)+yEdgePix(i+1))/2; }, S.secDepthLim, 'selected-month mean');
+  }
   // selection cells (depth=row, month=col) that drive the map + anchor marker
   drawCellSetOutline(ctx, S.boxTD.set, nM, xEdgePix, yEdgePix);
   drawAnchorCell(ctx, S.boxTD.anchor, nM, xEdgePix, yEdgePix);
@@ -603,7 +751,7 @@ var mapGeom = null;
 function drawMap() {
   var cv = document.getElementById('mapCanvas');
   var cssW = cv.parentElement.clientWidth, cssH = Math.max(300, Math.round(cssW * 0.62));
-  var ctx = setupCanvas(cv, cssW, cssH), R = plotRect(cssW, cssH);
+  var ctx = setupCanvas(cv, cssW, cssH), parts = panelRects(plotRect(cssW, cssH), S.mapProfiles), R = parts.main;
   var m = S.model, nY = m.sizes.lat, nX = m.sizes.lon;
   var latE = m.coords.latEdges, lonE = m.coords.lonEdges;
   var lat0 = latE[0], lat1 = latE[nY], lon0 = lonE[0], lon1 = lonE[nX];
@@ -618,6 +766,10 @@ function drawMap() {
   ctx.textAlign='right'; ctx.textBaseline='middle';
   [-60,-30,0,30,60].forEach(function(lv){ if(lv>=Math.min(lat0,lat1)&&lv<=Math.max(lat0,lat1)){ var yy=R.y+(1-(lv-lat0)/(lat1-lat0))*R.h; ctx.beginPath();ctx.moveTo(R.x-3,yy);ctx.lineTo(R.x,yy);ctx.stroke(); ctx.fillText(lv, R.x-6, yy);} });
   drawColorbar(ctx, cssW, R, varLabel(), S.mapLim);
+  if (S.mapProfiles) {
+    drawTopProfile(ctx, parts.top, S.mapLonArr, function(i){ return (xEdgePix(i)+xEdgePix(i+1))/2; }, S.mapLonLim, 'selected-latitude mean');
+    drawSideProfile(ctx, parts.side, S.mapLatArr, function(i){ return (yEdgePix(i)+yEdgePix(i+1))/2; }, S.mapLatLim, 'selected-longitude mean');
+  }
   // selection cells (lat=row, lon=col) that drive the section + anchor marker
   drawCellSetOutline(ctx, S.boxLL.set, nX, xEdgePix, yEdgePix);
   drawAnchorCell(ctx, S.boxLL.anchor, nX, xEdgePix, yEdgePix);
@@ -806,13 +958,15 @@ document.getElementById('cmapSel').onchange = function(e){ S.cmap = e.target.val
 document.getElementById('scaleSeg').onclick = function(e){ if(e.target.tagName!=='BUTTON')return; segSet('scaleSeg',e.target); S.log = e.target.dataset.v==='log'; recomputeAll(); };
 document.getElementById('missSeg').onclick = function(e){ if(e.target.tagName!=='BUTTON')return; segSet('missSeg',e.target); S.strict = e.target.dataset.v==='strict'; recomputeAll(); };
 document.getElementById('weightSel').onchange = function(e){ S.weightMode = e.target.value; recomputeAll(); };
+document.getElementById('secProfiles').onchange = function(e){ S.secProfiles = e.target.checked; recomputeAll(); };
+document.getElementById('mapProfiles').onchange = function(e){ S.mapProfiles = e.target.checked; recomputeAll(); };
 function segSet(id,btn){ document.querySelectorAll('#'+id+' button').forEach(function(b){b.classList.remove('on');}); btn.classList.add('on'); }
 document.getElementById('autoRange').onchange = function(e){ S.autoRange = e.target.checked;
   document.getElementById('vmin').disabled = e.target.checked; document.getElementById('vmax').disabled = e.target.checked;
   document.getElementById('linkScales').disabled = !e.target.checked; recomputeAll(); };
 document.getElementById('linkScales').onchange = function(e){ S.linkScales = e.target.checked; recomputeAll(); };
-document.getElementById('vmin').oninput = function(e){ S.vmin = +e.target.value; S.secLim = [S.vmin, S.vmax]; S.mapLim = [S.vmin, S.vmax]; draw(); };
-document.getElementById('vmax').oninput = function(e){ S.vmax = +e.target.value; S.secLim = [S.vmin, S.vmax]; S.mapLim = [S.vmin, S.vmax]; draw(); };
+document.getElementById('vmin').oninput = function(e){ S.vmin = +e.target.value; setAllLimits([S.vmin, S.vmax]); draw(); };
+document.getElementById('vmax').oninput = function(e){ S.vmax = +e.target.value; setAllLimits([S.vmin, S.vmax]); draw(); };
 document.getElementById('addCond').onclick = function(){ if(!S.model)return; S.conditions.push({varName:S.model.varNames[0],op:'>=',value:0}); renderConds(); };
 document.addEventListener('click', function(e){
   var b = e.target && e.target.closest ? e.target.closest('.dl') : null;

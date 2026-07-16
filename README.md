@@ -3,7 +3,7 @@
 A browser dashboard for exploring the [GLOBESINK](https://github.com/natembriggs/GLOBESINK)
 global BGC-Argo climatology NetCDF products (size-fractionated backscattering,
 POC, POC flux, particle size). It reads a NetCDF-4 file entirely in the browser
-— no server-side processing, no data upload — and shows two linked panels:
+— no server-side processing, no data upload — and shows two linked main panels:
 
 - **Left — time × depth section**, averaged over a latitude/longitude box.
 - **Right — map**, averaged over a month range and depth range (defaults to the
@@ -22,6 +22,12 @@ selection stays on each panel as a thin magenta rectangle.
   also **load your own NetCDF-4 file** from disk with the file picker.
 - **Pick the variable** to visualise from a dropdown.
 - **Linked box-averaging** across the two panels (see above).
+- **Optional marginal panels:** shrink either main heatmap to two-thirds of its
+  original width and height and use the freed space for quantitative line
+  plots. The section gains an all-month selected-depth mean above and an
+  all-depth selected-month mean to its right; the map gains analogous longitude
+  and latitude profiles. For discontiguous selections, each profile uses the
+  union of every selected row or column across the full retained axis.
 - **Log / linear** colour scale.
 - **Missing-value policy:** *ignore in mean* (nan-mean) or *missing if any*
   (the average is blank if any contributing cell is missing).
@@ -34,9 +40,9 @@ selection stays on each panel as a thin magenta rectangle.
   variables (e.g. keep only cells where `n_profiles >= 5`, or `POC_flux` is
   between two values). Multiple conditions are combined with AND.
 - **Colour controls:** several colormaps and manual or automatic (robust
-  2–98th percentile) colour limits. With auto on, **link L/R** shares one scale
-  across both panels or lets each auto-scale independently (so a deep,
-  low-signal map isn't swamped by high surface values in the section).
+  2–98th percentile) colour limits. With auto on, **link panels** shares one
+  value scale across every visible heatmap and marginal panel. When unlinked,
+  each marginal line plot uses its own range containing every plotted value.
 - **Excel-like cell selection:** click or drag to select (snapping to whole
   cells, updating the other panel live); **shift+click** extends the box from
   its anchor; **⌘/Ctrl+click** adds or removes an individual cell (discontiguous
@@ -133,6 +139,12 @@ With **n_bbp measurement count** selected, each contributing 4-D cell is
 weighted by its `n_bbp` value. Missing, non-finite, and non-positive weights are
 excluded. This option is disabled for a user-supplied file that has no `n_bbp`
 variable.
+
+The optional marginal lines preserve the same weighting choice. Physical
+section marginals include depth-bin or month-length weights as appropriate;
+physical map marginals include grid-cell area. Under `n_bbp` weighting, the
+effective measurement-count sums from the main reduction are carried into the
+marginal reduction rather than averaging already-normalised cells equally.
 
 ## Tests
 

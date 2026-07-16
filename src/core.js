@@ -402,7 +402,7 @@
   // cellsYX is an array of [y,x] pairs (arbitrary, possibly discontiguous).
   // physical weights = spherical grid-cell area; n_bbp weights = measurement
   // count in each contributing 4-D cell.
-  function sectionReduce(model, varName, keep, strict, cellsYX, weightMode) {
+  function sectionReduce(model, varName, keep, strict, cellsYX, weightMode, weightOut) {
     var s = model.sizes, nP = s.depth, nY = s.lat, nX = s.lon, nM = s.month;
     var d = model.vars[varName].data, nC = cellsYX.length, nw = nBbpWeights(model, weightMode || 'physical');
     var physicalW = new Float64Array(nC);
@@ -420,7 +420,9 @@
           if (isNaN(v)) { sawNaN = true; continue; }
           sum += v * w; sumW += w;
         }
-        out[p * nM + m] = (strict && sawNaN) || sumW === 0 ? NaN : sum / sumW;
+        var oi = p * nM + m;
+        out[oi] = (strict && sawNaN) || sumW === 0 ? NaN : sum / sumW;
+        if (weightOut) weightOut[oi] = sumW;
       }
     }
     return out; // indexed [p*nM + m]
@@ -430,7 +432,7 @@
   // cellsPM is an array of [p,m] pairs.
   // physical weights = depth-bin width × calendar month length; n_bbp weights =
   // measurement count in each contributing 4-D cell.
-  function mapReduce(model, varName, keep, strict, cellsPM, weightMode) {
+  function mapReduce(model, varName, keep, strict, cellsPM, weightMode, weightOut) {
     var s = model.sizes, nP = s.depth, nY = s.lat, nX = s.lon, nM = s.month;
     var d = model.vars[varName].data, nC = cellsPM.length, nw = nBbpWeights(model, weightMode || 'physical');
     var physicalW = new Float64Array(nC);
@@ -448,10 +450,40 @@
           if (isNaN(v)) { sawNaN = true; continue; }
           sum += v * w; sumW += w;
         }
-        out[y * nX + x] = (strict && sawNaN) || sumW === 0 ? NaN : sum / sumW;
+        var oi = y * nX + x;
+        out[oi] = (strict && sawNaN) || sumW === 0 ? NaN : sum / sumW;
+        if (weightOut) weightOut[oi] = sumW;
       }
     }
     return out; // indexed [y*nX + x]
+  }
+
+  // Marginal collapses of a 2-D grid [row*nCols + col], used by the profile
+  // panels. Optional weights must have the same shape; omitted means nan-mean.
+  // Missing values and non-positive/non-finite weights are ignored.
+  function marginalOverRows(grid, nRows, nCols, rows, weights) { // -> nCols
+    var out = new Float32Array(nCols);
+    for (var c = 0; c < nCols; c++) {
+      var sum = 0, sumW = 0;
+      for (var i = 0; i < rows.length; i++) {
+        var idx = rows[i] * nCols + c, v = grid[idx], w = weights ? weights[idx] : 1;
+        if (!isNaN(v) && isFinite(w) && w > 0) { sum += v * w; sumW += w; }
+      }
+      out[c] = sumW ? sum / sumW : NaN;
+    }
+    return out;
+  }
+  function marginalOverCols(grid, nRows, nCols, cols, weights) { // -> nRows
+    var out = new Float32Array(nRows);
+    for (var r = 0; r < nRows; r++) {
+      var sum = 0, sumW = 0;
+      for (var i = 0; i < cols.length; i++) {
+        var idx = r * nCols + cols[i], v = grid[idx], w = weights ? weights[idx] : 1;
+        if (!isNaN(v) && isFinite(w) && w > 0) { sum += v * w; sumW += w; }
+      }
+      out[r] = sumW ? sum / sumW : NaN;
+    }
+    return out;
   }
 
   // Robust colour limits (percentiles) over finite values, optionally >0 for log.
@@ -496,6 +528,8 @@
     buildKeepMask: buildKeepMask,
     sectionReduce: sectionReduce,
     mapReduce: mapReduce,
+    marginalOverRows: marginalOverRows,
+    marginalOverCols: marginalOverCols,
     robustLimits: robustLimits,
     edgesFromCentres: edgesFromCentres,
     cellIndexForValue: cellIndexForValue,

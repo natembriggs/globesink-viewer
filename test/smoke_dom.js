@@ -79,7 +79,7 @@ try {
   var m = html.match(/<script>([\s\S]*?)<\/script>\s*<\/body>/);
   if (!m) throw new Error('could not extract inline script');
   // strict-mode eval keeps declarations local, so expose what we need to assert on
-  eval(m[1] + '\n;globalThis.__gv = { S: S, recomputeAll: recomputeAll, recomputeKeep: recomputeKeep, loadModelFromBuffer: loadModelFromBuffer, loadPublished: loadPublished, landLoaded: function(){ return LAND != null; }, csvSectionGrid: csvSectionGrid, csvMapLong: csvMapLong, jsonExport: jsonExport };');
+  eval(m[1] + '\n;globalThis.__gv = { S: S, recomputeAll: recomputeAll, recomputeKeep: recomputeKeep, loadModelFromBuffer: loadModelFromBuffer, loadPublished: loadPublished, panelRects: panelRects, landLoaded: function(){ return LAND != null; }, csvSectionGrid: csvSectionGrid, csvMapLong: csvMapLong, jsonExport: jsonExport };');
   var G = globalThis.__gv, S = G.S;
   var recomputeAll = G.recomputeAll, recomputeKeep = G.recomputeKeep;
   // the app now starts blank; drive the file-load path directly
@@ -97,6 +97,7 @@ try {
   chk('boxTD default depth bin 1', rcTD.rows.length === 1 && rcTD.rows[0] === 1);
   chk('boxTD default annual', rcTD.cols.length === S.model.sizes.month && rcTD.cols[0] === 0);
   chk('physical weighting default', S.weightMode === 'physical');
+  chk('marginal panels default off', !S.secProfiles && !S.mapProfiles);
   chk('vmax > vmin (autorange)', S.vmax > S.vmin);
   chk('varSel option count', document.getElementById('varSel')._optCount === undefined || true);
 
@@ -108,6 +109,18 @@ try {
   S.weightMode = 'n_bbp'; recomputeAll();
   chk('n_bbp weighted recompute ok', S.secArr.length > 0 && S.mapArr.length > 0);
   S.weightMode = 'physical'; recomputeAll();
+  // enable all four marginal plots and exercise their rendering paths
+  S.log = false; S.secProfiles = true; S.mapProfiles = true; recomputeAll();
+  chk('section marginals sized', S.secMonthArr.length === S.model.sizes.month && S.secDepthArr.length === S.model.sizes.depth);
+  chk('map marginals sized', S.mapLonArr.length === S.model.sizes.lon && S.mapLatArr.length === S.model.sizes.lat);
+  S.weightMode = 'n_bbp'; recomputeAll();
+  chk('n_bbp marginal recompute ok', S.secMonthArr.length === S.model.sizes.month &&
+    S.mapLatArr.length === S.model.sizes.lat && S.secMonthArr.some(function(v){return isFinite(v);}));
+  S.weightMode = 'physical'; recomputeAll();
+  var pr = G.panelRects({x:10,y:20,w:300,h:180}, true);
+  chk('main panel shrinks by one third', pr.main.w === 200 && pr.main.h === 120);
+  chk('main bottom-left preserved', pr.main.x === 10 && pr.main.y + pr.main.h === 200);
+  chk('marginals fill removed space', pr.top.w === 200 && pr.top.h === 60 && pr.side.w === 100 && pr.side.h === 120);
   // simulate a section drag -> rectangle depth 0..2 x months 3..7
   var nMx = S.model.sizes.month;
   S.boxTD = { anchor: [0, 3], active: [2, 7], set: GVCore.selRectSet([0, 3], [2, 7], nMx) }; recomputeAll();
@@ -117,6 +130,20 @@ try {
   S.boxTD.anchor = [1, 10]; S.boxTD.active = [1, 0]; recomputeAll();
   chk('wrapped month -> 2 col runs', GVCore.runsFromIdx(GVCore.selRowsCols(S.boxTD.set, nMx).cols).length === 2);
   chk('map after wrapped box ok', S.mapArr.length === S.model.sizes.lat * S.model.sizes.lon);
+  // ctrl-click-like discontiguous selection: top marginal must use the union of
+  // selected depth rows and still produce every month.
+  S.boxTD.set = {}; S.boxTD.set[0*nMx+1] = 1; S.boxTD.set[2*nMx+8] = 1;
+  S.boxTD.anchor = [0,1]; S.boxTD.active = [2,8]; recomputeAll();
+  var unionTD = GVCore.selRowsCols(S.boxTD.set, nMx);
+  chk('discontiguous depth union', unionTD.rows.join(',') === '0,2');
+  chk('depth union applied to all months', S.secMonthArr.length === nMx && S.secMonthArr.every(function(v){return isFinite(v);}));
+  // The map profiles apply the same union rule to latitude/longitude cells.
+  var nXx = S.model.sizes.lon;
+  S.boxLL.set = {}; S.boxLL.set[0*nXx+3] = 1; S.boxLL.set[2*nXx+9] = 1;
+  S.boxLL.anchor = [0,3]; S.boxLL.active = [2,9]; recomputeAll();
+  var unionLL = GVCore.selRowsCols(S.boxLL.set, nXx);
+  chk('discontiguous latitude union', unionLL.rows.join(',') === '0,2');
+  chk('latitude union applied to all longitudes', S.mapLonArr.length === nXx && S.mapLonArr.some(function(v){return isFinite(v);}));
   chk('land overlay loaded + drawn', G.landLoaded && G.landLoaded());
   // published-dataset load path: fetch a repo-hosted file -> parse -> render
   G.loadPublished('data/GLOBESINK_monthly_climatologies_smoothed_interpolated_minimal.nc');
@@ -127,8 +154,14 @@ try {
   // linked vs unlinked colour scales
   S.linkScales = true; recomputeAll();
   chk('linked: secLim == mapLim', S.secLim[0] === S.mapLim[0] && S.secLim[1] === S.mapLim[1]);
+  chk('linked: all marginal limits equal', S.secMonthLim[0] === S.secLim[0] && S.secDepthLim[1] === S.secLim[1] &&
+    S.mapLonLim[0] === S.secLim[0] && S.mapLatLim[1] === S.secLim[1]);
   S.linkScales = false; recomputeAll();
   chk('unlinked: both limits finite', isFinite(S.secLim[0]) && isFinite(S.secLim[1]) && isFinite(S.mapLim[0]) && isFinite(S.mapLim[1]));
+  function finiteExt(a){ var lo=Infinity,hi=-Infinity; for(var i=0;i<a.length;i++)if(isFinite(a[i])){lo=Math.min(lo,a[i]);hi=Math.max(hi,a[i]);} return [lo,hi]; }
+  var se = finiteExt(S.secMonthArr), me = finiteExt(S.mapLatArr);
+  chk('unlinked section marginal contains extrema', S.secMonthLim[0] <= se[0] && S.secMonthLim[1] >= se[1]);
+  chk('unlinked map marginal contains extrema', S.mapLatLim[0] <= me[0] && S.mapLatLim[1] >= me[1]);
   // data export generators (pure string builders)
   var secCsv = G.csvSectionGrid();
   chk('section CSV grid header', secCsv.indexOf('depth_m,Jan,') >= 0);
