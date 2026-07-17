@@ -30,6 +30,8 @@
   canvas { width:100%; height:auto; display:block; touch-action:none; cursor:crosshair; }
   #status { padding:6px 14px; border-top:1px solid var(--line); color:var(--muted); font-size:12px; min-height:26px; }
   .hint { color:var(--muted); font-size:11px; }
+  #varSel { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+  #varDesc { max-width:320px; }
   a { color:var(--accent); }
   .dlrow { text-align:center; margin-top:2px; }
   .dlrow .dl { padding:2px 8px; font-size:11px; margin:0 2px; border:1px solid var(--line); border-radius:5px; background:#fff; cursor:pointer; }
@@ -52,7 +54,9 @@
     </div>
     <div class="hint">Built-in files have 8 core variables — load your own NetCDF for the full set. Download latest full published dataset <a href="https://doi.org/10.5281/zenodo.19558504" target="_blank" rel="noopener">here</a>.</div>
   </div>
-  <div class="grp"><label>Variable</label><select id="varSel"></select></div>
+  <div class="grp"><label>Variable</label><select id="varSel"></select>
+    <div class="hint" id="varDesc"></div>
+  </div>
   <div class="grp"><label>Colormap</label>
     <select id="cmapSel">
       <option value="reds">Reds</option>
@@ -180,6 +184,15 @@ var S = {
 
 function fmtLat(v){ return (Math.abs(v)).toFixed(0) + (v>=0?'°N':'°S'); }
 function fmtLon(v){ return (Math.abs(v)).toFixed(0) + (v>=0?'°E':'°W'); }
+function capitalize(s){ return s ? s.charAt(0).toUpperCase() + s.slice(1) : s; }
+// The full variable description (its NetCDF long_name), shown under the
+// selector for whichever variable is currently plotted.
+function updateVarDesc(){
+  var el = document.getElementById('varDesc');
+  if (!S.model || !S.varName) { el.textContent = ''; return; }
+  var desc = S.model.vars[S.varName].long_name;
+  el.textContent = (desc && desc !== S.varName) ? capitalize(desc) : '';
+}
 
 // ---------- data loading ----------
 function loadModelFromBuffer(ab, name, source) {
@@ -195,9 +208,19 @@ function loadModelFromBuffer(ab, name, source) {
     var orderedNames = core.concat(rest);
     var vs = document.getElementById('varSel');
     vs.innerHTML = '';
+    // "name (units)" label, padded (in the dropdown's monospace font) so every
+    // option's description lines up in one column just right of the longest
+    // label, regardless of which optgroup it's in.
+    var nameUnitLabel = function (n) { return n + (model.vars[n].units ? '  (' + model.vars[n].units + ')' : ''); };
+    var maxLabelLen = 0;
+    model.varNames.forEach(function (n) { maxLabelLen = Math.max(maxLabelLen, nameUnitLabel(n).length); });
+    var padRight = function (s, len) { while (s.length < len) s += ' '; return s; };
     var addOpt = function (parent, n) {
       var o = document.createElement('option'); o.value = n;
-      o.textContent = n + (model.vars[n].units ? '  (' + model.vars[n].units + ')' : '');
+      var label = nameUnitLabel(n), desc = model.vars[n].long_name;
+      // parseNetCDF falls back to the variable's own key when long_name is
+      // absent — skip appending it then, since that's not a description.
+      o.textContent = (desc && desc !== n) ? padRight(label, maxLabelLen + 3) + capitalize(desc) : label;
       parent.appendChild(o);
     };
     if (core.length && rest.length) {   // fuller file: label the two groups
@@ -210,6 +233,7 @@ function loadModelFromBuffer(ab, name, source) {
     }
     S.varName = model.varNames.indexOf('flux_POC') >= 0 ? 'flux_POC' : orderedNames[0];
     vs.value = S.varName;
+    updateVarDesc();
     S.cmap = defaultCmapFor(S.varName);
     document.getElementById('cmapSel').value = S.cmap;
     var nopt = document.getElementById('weightNbbp');
@@ -1313,6 +1337,7 @@ document.getElementById('varSel').onchange = function(e){
   S.varName = e.target.value;
   S.cmap = defaultCmapFor(S.varName);                       // apply the variable's default colormap
   document.getElementById('cmapSel').value = S.cmap;
+  updateVarDesc();
   recomputeAll();
 };
 document.getElementById('cmapSel').onchange = function(e){ S.cmap = e.target.value; draw(); };
