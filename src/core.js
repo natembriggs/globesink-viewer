@@ -249,6 +249,7 @@
       coordAttrs: coordAttrs,
       weights: {
         depth: widthsFromEdges(depthEdges),
+        lon: widthsFromEdges(lonEdges),
         month: monthWeights.values,
         area: gridCellAreaWeights(latEdges, lonEdges),
         monthCalendar: monthWeights.calendar
@@ -482,6 +483,80 @@
     return out; // indexed [y*nX + x]
   }
 
+  // Extra panels below the main two: keep depth+lat (or month+lat) as plotted
+  // axes and average over the *ranges currently selected* on the two main
+  // panels for the remaining dimension(s) — the same "selected range, not the
+  // whole axis" rule the marginal profile panels use, just producing a 2-D
+  // grid instead of a 1-D line.
+  //
+  // Physical weighting: reducing over longitude at a *fixed* latitude needs no
+  // cos(lat) term — it's a per-row constant that cancels in the weighted mean
+  // — so a plain longitude bin-width weight is exactly the area weight there.
+
+  // Bottom-left panel: value(depth, lat) averaged over a set of selected lon
+  // columns (from the map's own selection) and month columns (from the
+  // section's own selection). lonCols/monthCols are arrays of data indices.
+  function depthLatReduce(model, varName, keep, strict, lonCols, monthCols, weightMode, weightOut) {
+    var s = model.sizes, nP = s.depth, nY = s.lat, nX = s.lon, nM = s.month;
+    var d = model.vars[varName].data, nw = nBbpWeights(model, weightMode || 'physical');
+    var nLon = lonCols.length, nMon = monthCols.length, lonW = model.weights.lon, monW = model.weights.month;
+    var out = new Float32Array(nP * nY);
+    for (var p = 0; p < nP; p++) {
+      for (var y = 0; y < nY; y++) {
+        var sum = 0, sumW = 0, sawNaN = false;
+        for (var xi = 0; xi < nLon; xi++) {
+          var x = lonCols[xi];
+          for (var mi = 0; mi < nMon; mi++) {
+            var mo = monthCols[mi];
+            var idx = ((p * nY + y) * nX + x) * nM + mo;
+            if (keep && !keep[idx]) continue;
+            var w = nw ? nw[idx] : lonW[x] * monW[mo];
+            if (!isFinite(w) || w <= 0) continue;
+            var v = d[idx];
+            if (isNaN(v)) { sawNaN = true; continue; }
+            sum += v * w; sumW += w;
+          }
+        }
+        var oi = p * nY + y;
+        out[oi] = (strict && sawNaN) || sumW === 0 ? NaN : sum / sumW;
+        if (weightOut) weightOut[oi] = sumW;
+      }
+    }
+    return out; // indexed [p*nY + y]
+  }
+
+  // Bottom-right panel: value(lat, month) averaged over a set of selected
+  // depth rows (from the section's own selection) and lon columns (from the
+  // map's own selection). depthRows/lonCols are arrays of data indices.
+  function latMonthReduce(model, varName, keep, strict, depthRows, lonCols, weightMode, weightOut) {
+    var s = model.sizes, nP = s.depth, nY = s.lat, nX = s.lon, nM = s.month;
+    var d = model.vars[varName].data, nw = nBbpWeights(model, weightMode || 'physical');
+    var nDep = depthRows.length, nLon = lonCols.length, depW = model.weights.depth, lonW = model.weights.lon;
+    var out = new Float32Array(nY * nM);
+    for (var y = 0; y < nY; y++) {
+      for (var mo = 0; mo < nM; mo++) {
+        var sum = 0, sumW = 0, sawNaN = false;
+        for (var pi = 0; pi < nDep; pi++) {
+          var p = depthRows[pi];
+          for (var xi = 0; xi < nLon; xi++) {
+            var x = lonCols[xi];
+            var idx = ((p * nY + y) * nX + x) * nM + mo;
+            if (keep && !keep[idx]) continue;
+            var w = nw ? nw[idx] : depW[p] * lonW[x];
+            if (!isFinite(w) || w <= 0) continue;
+            var v = d[idx];
+            if (isNaN(v)) { sawNaN = true; continue; }
+            sum += v * w; sumW += w;
+          }
+        }
+        var oi = y * nM + mo;
+        out[oi] = (strict && sawNaN) || sumW === 0 ? NaN : sum / sumW;
+        if (weightOut) weightOut[oi] = sumW;
+      }
+    }
+    return out; // indexed [y*nM + mo]
+  }
+
   // Marginal collapses of a 2-D grid [row*nCols + col], used by the profile
   // panels. Optional weights must have the same shape; omitted means nan-mean.
   // Missing values and non-positive/non-finite weights are ignored.
@@ -552,6 +627,8 @@
     buildKeepMask: buildKeepMask,
     sectionReduce: sectionReduce,
     mapReduce: mapReduce,
+    depthLatReduce: depthLatReduce,
+    latMonthReduce: latMonthReduce,
     marginalOverRows: marginalOverRows,
     marginalOverCols: marginalOverCols,
     robustLimits: robustLimits,

@@ -23,7 +23,8 @@
   #condList:not(:empty) { margin-top:6px; }
   .cond { display:flex; gap:6px; align-items:center; margin-bottom:5px; flex-wrap:wrap; }
   .cond .x { border-color:#e0a0c0; color:var(--accent); }
-  #plots { display:flex; flex-wrap:wrap; gap:6px; padding:10px; }
+  #plots, #plots2 { display:flex; flex-wrap:wrap; gap:6px; padding:10px; }
+  #depthLatCanvas, #latMonthCanvas { cursor:default; }
   .panelwrap { flex:1 1 460px; min-width:340px; border:1px solid transparent; border-radius:6px; padding:4px; }
   .panelwrap.focused { border-color:var(--accent); }
   .panelwrap h3 { margin:0 0 4px; font-size:13px; font-weight:600; text-align:center; }
@@ -84,6 +85,9 @@
       <label class="hint" title="Show longitude and latitude profiles around the map"><input type="checkbox" id="mapProfiles"> map</label>
     </div>
   </div>
+  <div class="grp"><label>Extra panels</label>
+    <label class="hint" title="Add lat×depth and month×lat panels below the two main panels, averaged over the ranges currently selected on them"><input type="checkbox" id="extraPanels"> show below</label>
+  </div>
   <div class="grp"><label>Colour range</label>
     <div style="display:flex;gap:6px;align-items:center">
       <label class="hint"><input type="checkbox" id="autoRange" checked> auto</label>
@@ -122,6 +126,19 @@
       <button class="dl" data-plot="map" data-fmt="csvlong">CSV long</button>
       <button class="dl" data-plot="map" data-fmt="json">JSON</button>
     </div>
+  </div>
+</div>
+
+<div id="plots2" style="display:none">
+  <div class="panelwrap">
+    <h3 id="depthLatTitle">lat × depth</h3>
+    <canvas id="depthLatCanvas"></canvas>
+    <div class="hint" style="text-align:center">Averaged over the longitude range selected on the map and the month range selected on the section, above. No selection here.</div>
+  </div>
+  <div class="panelwrap">
+    <h3 id="latMonthTitle">month × lat</h3>
+    <canvas id="latMonthCanvas"></canvas>
+    <div class="hint" style="text-align:center">Averaged over the depth range selected on the section and the longitude range selected on the map, above. No selection here.</div>
   </div>
 </div>
 
@@ -172,10 +189,11 @@ function ramp(stops, t) {
 var S = {
   model: null, varName: null, cmap: 'reds', log: false, strict: false,
   weightMode: 'physical',
-  secProfiles: false, mapProfiles: false,
+  secProfiles: false, mapProfiles: false, extraPanels: false,
   autoRange: true, linkScales: true, vmin: 0, vmax: 1,
   secLim: [0, 1], mapLim: [0, 1],
   secMonthLim: [0, 1], secDepthLim: [0, 1], mapLonLim: [0, 1], mapLatLim: [0, 1],
+  depthLatLim: [0, 1], latMonthLim: [0, 1],
   monthOffset: 0,  // data-month index shown at the left edge of the section panel (drag its bottom axis to pan)
   lonOffset: 0,    // data-lon index shown at the left edge of the map panel (drag its bottom axis to pan)
   boxLL: null,  // {set,anchor,active} lat/lon cells (row=lat,col=lon) -> drives section; drawn on map
@@ -183,7 +201,8 @@ var S = {
   focus: null,  // 'section' | 'map' — last-clicked plot; receives arrow keys
   conditions: [], keep: null,
   secArr: null, mapArr: null, secWeight: null, mapWeight: null,
-  secMonthArr: null, secDepthArr: null, mapLonArr: null, mapLatArr: null
+  secMonthArr: null, secDepthArr: null, mapLonArr: null, mapLatArr: null,
+  depthLatArr: null, latMonthArr: null, depthLatWeight: null, latMonthWeight: null
 };
 
 function fmtLat(v){ return (Math.abs(v)).toFixed(0) + (v>=0?'°N':'°S'); }
@@ -266,6 +285,7 @@ function recomputeAll() {
   S.mapArr = GVCore.mapReduce(m, S.varName, S.keep, S.strict,
     GVCore.selCells(S.boxTD.set, s.month), S.weightMode, S.mapWeight);
   recomputeProfiles();
+  recomputeExtraPanels();
   if (S.autoRange) {
     if (S.linkScales) {
       // Water shallower than the selected depth range shouldn't stretch the
@@ -277,13 +297,17 @@ function recomputeAll() {
       var topRow = selRows.length ? selRows[0] : 0;
       var secArrDeep = maskShallowSection(S.secArr, s.depth, s.month, topRow);
       var secDepthDeep = maskShallowProfile(S.secDepthArr, topRow);
-      var arrays = [secArrDeep, S.mapArr];
-      if (S.secProfiles) arrays.push(S.secMonthArr, secDepthDeep);
-      if (S.mapProfiles) arrays.push(S.mapLonArr, S.mapLatArr);
-      var all = concatArrays(arrays), lim = GVCore.robustLimits(all, 0.02, 0.98, S.log);
-      // Robust limits remain useful for the heatmaps, but every linked marginal
-      // must remain fully visible (aside from the clipped shallow profile bins).
-      arrays.slice(2).forEach(function(a){ lim = includeArrayLimits(lim, a, S.log); });
+      // Heatmaps are only percentile-clamped (a few saturated-colour cells is
+      // fine); marginal LINE profiles must additionally stay fully on-panel
+      // (a clipped line reads as broken), so their own extrema are folded in
+      // separately below.
+      var heatmaps = [secArrDeep, S.mapArr];
+      if (S.extraPanels) heatmaps.push(S.depthLatArr, S.latMonthArr);
+      var marginals = [];
+      if (S.secProfiles) marginals.push(S.secMonthArr, secDepthDeep);
+      if (S.mapProfiles) marginals.push(S.mapLonArr, S.mapLatArr);
+      var all = concatArrays(heatmaps.concat(marginals)), lim = GVCore.robustLimits(all, 0.02, 0.98, S.log);
+      marginals.forEach(function(a){ lim = includeArrayLimits(lim, a, S.log); });
       // 5% headroom above the auto max so a marginal peak at the limit isn't
       // drawn flush against its panel's top edge.
       setAllLimits(padMax(safeLimits(lim, S.log), 0.05, S.log));
@@ -294,6 +318,10 @@ function recomputeAll() {
       S.secDepthLim = fullArrayLimits(S.secDepthArr, S.log);
       S.mapLonLim = fullArrayLimits(S.mapLonArr, S.log);
       S.mapLatLim = fullArrayLimits(S.mapLatArr, S.log);
+      if (S.extraPanels) {
+        S.depthLatLim = safeLimits(GVCore.robustLimits(S.depthLatArr, 0.02, 0.98, S.log), S.log);
+        S.latMonthLim = safeLimits(GVCore.robustLimits(S.latMonthArr, 0.02, 0.98, S.log), S.log);
+      }
     }
     // the min/max boxes echo the map panel's range (the one usually tuned for
     // deep, low-signal views); with scales linked the panels share it anyway.
@@ -335,6 +363,19 @@ function recomputeProfiles() {
     S.mapLonArr = GVCore.marginalOverRows(S.mapArr, s.lat, s.lon, ll.rows, mapW);
     S.mapLatArr = GVCore.marginalOverCols(S.mapArr, s.lat, s.lon, ll.cols, mapW);
   } else { S.mapLonArr = S.mapLatArr = null; }
+}
+// The two extra panels below keep depth+lat / month+lat as full axes and
+// reduce over the *other* two dimensions using the ranges currently selected
+// on the two main panels — same "selected range, not the whole axis" rule as
+// the marginal profiles, just feeding a 2-D grid reducer instead of a 1-D one.
+function recomputeExtraPanels() {
+  var m = S.model, s = m.sizes;
+  if (!S.extraPanels) { S.depthLatArr = S.latMonthArr = null; return; }
+  var ll = GVCore.selRowsCols(S.boxLL.set, s.lon), td = GVCore.selRowsCols(S.boxTD.set, s.month);
+  S.depthLatWeight = new Float64Array(s.depth * s.lat);
+  S.latMonthWeight = new Float64Array(s.lat * s.month);
+  S.depthLatArr = GVCore.depthLatReduce(m, S.varName, S.keep, S.strict, ll.cols, td.cols, S.weightMode, S.depthLatWeight);
+  S.latMonthArr = GVCore.latMonthReduce(m, S.varName, S.keep, S.strict, td.rows, ll.cols, S.weightMode, S.latMonthWeight);
 }
 function concatArrays(arrays) {
   var n = 0; arrays.forEach(function(a){ if(a) n += a.length; });
@@ -404,6 +445,7 @@ function setAllLimits(lim) {
   S.secLim = lim.slice(); S.mapLim = lim.slice();
   S.secMonthLim = lim.slice(); S.secDepthLim = lim.slice();
   S.mapLonLim = lim.slice(); S.mapLatLim = lim.slice();
+  S.depthLatLim = lim.slice(); S.latMonthLim = lim.slice();
 }
 function fmtNum(v){ var a=Math.abs(v); return a && (a<1e-3||a>=1e5) ? v.toExponential(2) : (+v.toPrecision(4)).toString(); }
 
@@ -441,6 +483,12 @@ function updateTitles() {
     'lat ' + edgeRunsLabel(rcSec.rows, c.latEdges, fmtLat) + ',  lon ' + edgeRunsLabel(rcSec.cols, c.lonEdges, fmtLon);
   document.getElementById('mapTitle').textContent =
     monthRunsLabel(rcMap.cols) + ',  ' + depthRunsLabel(rcMap.rows);
+  if (S.extraPanels) {
+    document.getElementById('depthLatTitle').textContent =
+      'lon ' + edgeRunsLabel(rcSec.cols, c.lonEdges, fmtLon) + ',  ' + monthRunsLabel(rcMap.cols);
+    document.getElementById('latMonthTitle').textContent =
+      depthRunsLabel(rcMap.rows) + ',  lon ' + edgeRunsLabel(rcSec.cols, c.lonEdges, fmtLon);
+  }
 }
 
 // ---------- drawing ----------
@@ -1075,6 +1123,59 @@ function drawMap(sharedH) {
   drawAnchorCell(ctx, S.boxLL.anchor, nX, lonAxis, yEdgePix);
   mapGeom = { R:R, cv:cv, colAxis: lonAxis, lat0:lat0, lat1:lat1 };
 }
+
+// ----- extra panel (bottom-left): x=lat, y=depth. No pan, no selection —
+// purely a read-out of what's currently selected on the two main panels. -----
+var depthLatGeom = null;
+function drawDepthLat(sharedH) {
+  var cv = document.getElementById('depthLatCanvas');
+  var cssW = cv.parentElement.clientWidth, cssH = sharedH || Math.max(300, Math.round(cssW * 0.7));
+  var ctx = setupCanvas(cv, cssW, cssH), R = plotRect(cssW, cssH, false);
+  var m = S.model, nP = m.sizes.depth, nY = m.sizes.lat;
+  var latE = m.coords.latEdges, lat0 = latE[0], lat1 = latE[nY];
+  var dTop = m.coords.depthEdges[0], dBot = m.coords.depthEdges[nP];
+  var latAxis = {
+    leftPix: function (c) { return R.x + ((latE[c] - lat0) / (lat1 - lat0)) * R.w; },
+    rightPix: function (c) { return R.x + ((latE[c + 1] - lat0) / (lat1 - lat0)) * R.w; }
+  };
+  var yEdgePix = function (r) { return R.y + ((m.coords.depthEdges[r] - dTop) / (dBot - dTop)) * R.h; };
+  ctx.clearRect(0, 0, cssW, cssH);
+  drawCells(ctx, R, nY, nP, latAxis, yEdgePix, function (r, c) { return S.depthLatArr[r * nY + c]; }, S.depthLatLim);
+  frame(ctx, R);
+  axisStyle(ctx); ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+  [-60, -30, 0, 30, 60].forEach(function (lv) { if (lv >= Math.min(lat0, lat1) && lv <= Math.max(lat0, lat1)) { var xx = R.x + ((lv - lat0) / (lat1 - lat0)) * R.w; ctx.beginPath(); ctx.moveTo(xx, R.y + R.h); ctx.lineTo(xx, R.y + R.h + 3); ctx.stroke(); ctx.fillText(lv, xx, R.y + R.h + 5); } });
+  ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
+  var dticks = [0, 200, 400, 600, 800, 1000, 1200, 1400, 1600, 1800, 2000];
+  dticks.forEach(function (dv) { if (dv >= dTop && dv <= dBot) { var yy = R.y + ((dv - dTop) / (dBot - dTop)) * R.h; ctx.beginPath(); ctx.moveTo(R.x - 3, yy); ctx.lineTo(R.x, yy); ctx.stroke(); ctx.fillText(dv, R.x - 6, yy); } });
+  ctx.save(); ctx.translate(14, R.y + R.h / 2); ctx.rotate(-Math.PI / 2); ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText('depth (m)', 0, 0); ctx.restore();
+  drawColorbar(ctx, cssW, R, varLabel(), S.depthLatLim);
+  depthLatGeom = { R: R, cv: cv };
+}
+
+// ----- extra panel (bottom-right): x=month, y=lat. No pan, no selection. -----
+var latMonthGeom = null;
+function drawLatMonth(sharedH) {
+  var cv = document.getElementById('latMonthCanvas');
+  var cssW = cv.parentElement.clientWidth, cssH = sharedH || Math.max(300, Math.round(cssW * 0.7));
+  var ctx = setupCanvas(cv, cssW, cssH), R = plotRect(cssW, cssH, false);
+  var m = S.model, nM = m.sizes.month, nY = m.sizes.lat;
+  var latE = m.coords.latEdges, lat0 = latE[0], lat1 = latE[nY];
+  var monthAxis = {
+    leftPix: function (c) { return R.x + (c / nM) * R.w; },
+    rightPix: function (c) { return R.x + ((c + 1) / nM) * R.w; }
+  };
+  var yEdgePix = function (r) { return R.y + (1 - (latE[r] - lat0) / (lat1 - lat0)) * R.h; }; // lat up
+  ctx.clearRect(0, 0, cssW, cssH);
+  drawCells(ctx, R, nM, nY, monthAxis, yEdgePix, function (r, c) { return S.latMonthArr[r * nM + c]; }, S.latMonthLim);
+  frame(ctx, R);
+  axisStyle(ctx); ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+  for (var mi = 0; mi < nM; mi++) ctx.fillText(MONTHS[mi], (monthAxis.leftPix(mi) + monthAxis.rightPix(mi)) / 2, R.y + R.h + 5);
+  ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
+  [-60, -30, 0, 30, 60].forEach(function (lv) { if (lv >= Math.min(lat0, lat1) && lv <= Math.max(lat0, lat1)) { var yy = R.y + (1 - (lv - lat0) / (lat1 - lat0)) * R.h; ctx.beginPath(); ctx.moveTo(R.x - 3, yy); ctx.lineTo(R.x, yy); ctx.stroke(); ctx.fillText(lv, R.x - 6, yy); } });
+  drawColorbar(ctx, cssW, R, varLabel(), S.latMonthLim);
+  latMonthGeom = { R: R, cv: cv };
+}
+
 function varLabel(){ var v=S.model.vars[S.varName]; return v.name + (v.units?' ('+v.units+')':'') + (S.log?' [log]':''); }
 // Draw a label where unit exponents written as "^-2" or "^3" are rendered as
 // real superscripts (smaller, raised text) instead of the literal caret.
@@ -1118,6 +1219,12 @@ function draw(){
                     document.getElementById('mapCanvas').parentElement.clientWidth);
   var cssH = Math.max(300, Math.round(w * 0.7));
   drawSection(cssH); drawMap(cssH);
+  if (S.extraPanels) {
+    var w2 = Math.min(document.getElementById('depthLatCanvas').parentElement.clientWidth,
+                       document.getElementById('latMonthCanvas').parentElement.clientWidth);
+    var cssH2 = Math.max(300, Math.round(w2 * 0.7));
+    drawDepthLat(cssH2); drawLatMonth(cssH2);
+  }
 }
 
 // Placeholder shown before a dataset is loaded (or while one is loading).
@@ -1340,6 +1447,11 @@ document.getElementById('missSeg').onclick = function(e){ if(e.target.tagName!==
 document.getElementById('weightSel').onchange = function(e){ S.weightMode = e.target.value; recomputeAll(); };
 document.getElementById('secProfiles').onchange = function(e){ S.secProfiles = e.target.checked; recomputeAll(); };
 document.getElementById('mapProfiles').onchange = function(e){ S.mapProfiles = e.target.checked; recomputeAll(); };
+document.getElementById('extraPanels').onchange = function(e){
+  S.extraPanels = e.target.checked;
+  document.getElementById('plots2').style.display = S.extraPanels ? 'flex' : 'none';
+  recomputeAll();
+};
 function segSet(id,btn){ document.querySelectorAll('#'+id+' button').forEach(function(b){b.classList.remove('on');}); btn.classList.add('on'); }
 document.getElementById('autoRange').onchange = function(e){ S.autoRange = e.target.checked;
   document.getElementById('vmin').disabled = e.target.checked; document.getElementById('vmax').disabled = e.target.checked;

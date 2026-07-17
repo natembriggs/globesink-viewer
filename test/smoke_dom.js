@@ -118,6 +118,29 @@ try {
   chk('n_bbp marginal recompute ok', S.secMonthArr.length === S.model.sizes.month &&
     S.mapLatArr.length === S.model.sizes.lat && S.secMonthArr.some(function(v){return isFinite(v);}));
   S.weightMode = 'physical'; recomputeAll();
+  // extra panels below the main two: lat x depth and month x lat, averaged
+  // over the ranges currently selected on the main panels
+  S.extraPanels = true; recomputeAll();
+  chk('depthLat sized depth*lat', S.depthLatArr.length === S.model.sizes.depth * S.model.sizes.lat);
+  chk('latMonth sized lat*month', S.latMonthArr.length === S.model.sizes.lat * S.model.sizes.month);
+  chk('extra panels have finite data', S.depthLatArr.some(function(v){return isFinite(v);}) && S.latMonthArr.some(function(v){return isFinite(v);}));
+  G.draw();   // exercise drawDepthLat/drawLatMonth without throwing
+  S.weightMode = 'n_bbp'; recomputeAll();
+  chk('n_bbp extra panels ok', S.depthLatArr.length > 0 && S.latMonthArr.length > 0);
+  S.weightMode = 'physical'; recomputeAll();
+  // Narrowing the section's month selection should change the depth x lat
+  // panel (it's reduced over months); n_bbp (the current default varName) has
+  // no seasonal signal in the synthetic fixture, so switch to POC_flux, which
+  // does, to make this a meaningful check.
+  var savedVarName = S.varName;
+  S.varName = 'POC_flux'; recomputeAll();
+  var beforeDL = S.depthLatArr.slice();
+  var nMx0 = S.model.sizes.month;
+  S.boxTD.set = {}; S.boxTD.set[1 * nMx0 + 0] = 1; S.boxTD.anchor = [1,0]; S.boxTD.active = [1,0]; recomputeAll();
+  chk('depthLat responds to section month selection', !S.depthLatArr.every(function(v,i){ return isNaN(v) ? isNaN(beforeDL[i]) : v === beforeDL[i]; }));
+  S.varName = savedVarName;
+  S.extraPanels = false; recomputeAll();
+  chk('extra panels cleared when disabled', S.depthLatArr === null && S.latMonthArr === null);
   var pr = G.panelRects({x:10,y:20,w:300,h:180}, true);
   chk('main panel shrinks to three-quarters', pr.main.w === 225 && pr.main.h === 135);
   chk('main bottom-left preserved', pr.main.x === 10 && pr.main.y + pr.main.h === 200);

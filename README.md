@@ -28,6 +28,12 @@ selection stays on each panel as a thin magenta rectangle.
   all-depth selected-month mean to its right; the map gains analogous longitude
   and latitude profiles. For discontiguous selections, each profile uses the
   union of every selected row or column across the full retained axis.
+- **Optional extra panels:** two more heatmaps below the main two — latitude ×
+  depth (left) and month × latitude (right) — at full size, without shrinking
+  the main panels. They have no selection of their own; instead they keep
+  depth+latitude (or month+latitude) as full axes and average over the other
+  two dimensions using whatever ranges are currently selected on the section
+  and map above, so they update live as those selections change.
 - **Log / linear** colour scale.
 - **Missing-value policy:** *ignore in mean* (nan-mean) or *missing if any*
   (the average is blank if any contributing cell is missing).
@@ -156,14 +162,15 @@ test/run.sh
 ```
 
 It (1) checks physical and `n_bbp` weighted reducers, the marginal-profile
-collapses (including the discontiguous-selection union rule), the Excel-like
-selection edit logic (click/shift/ctrl/arrow), the panel-shrink layout math,
-and cross-variable conditions — against `numpy` values or hand-derived cases —
-and (2) runs the full `index.html` wiring (including all four marginal
-profiles, both weighting modes, and linked/unlinked scales) against a stubbed
-DOM/Canvas to catch runtime errors. Currently 60 core checks + 44 wiring
+collapses (including the discontiguous-selection union rule), the extra-panel
+(lat×depth, month×lat) reducers, the Excel-like selection edit logic
+(click/shift/ctrl/arrow), the panel-shrink layout math, and cross-variable
+conditions — against `numpy` values or hand-derived cases — and (2) runs the
+full `index.html` wiring (including all four marginal profiles, both extra
+panels, both weighting modes, and linked/unlinked scales) against a stubbed
+DOM/Canvas to catch runtime errors. Currently 69 core checks + 66 wiring
 checks, all passing. Rendering itself (pixels, drag interactions, visual
-alignment of the marginal panels) can only be verified in a real browser.
+alignment of the marginal/extra panels) can only be verified in a real browser.
 
 ## Coastline data
 
