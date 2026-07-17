@@ -860,8 +860,20 @@ function loadLand() {
 // with no artificial jump; that ring is then drawn three times, offset by
 // -R.w, 0 and +R.w (one full 360deg of pixels each), so whichever copy
 // actually falls inside the panel is the one the clip lets through.
+//
+// Fill and stroke use *different* paths. Antarctica's coastline is stored as
+// a polygon closed through the south pole — the real coast runs to 180degE,
+// then the ring drops straight down the 180deg meridian to lat -90, traverses
+// along the pole, and climbs back up at 180degW to rejoin the coast. Those
+// pole-closure edges are needed for the fill (they enclose the continent down
+// to the pole) but must NOT be stroked: unpanned they hide at the panel edge,
+// but panned they show as a vertical line down to the map's bottom. So the
+// stroke path lifts the pen across any segment touching a near-pole vertex,
+// leaving the real coast — which is continuous across 180deg via the adjacent
+// wrap copy — cleanly outlined.
 function drawLand(ctx, R, lonEdges, lon0, lon1, lat0, lat1) {
   if (!LAND) return;
+  var POLE_LAT = 89.9;   // vertices at |lat|>=this are artificial pole-closure points, not real coast
   var key = [R.x, R.y, R.w, R.h, lon0, lon1, lat0, lat1, S.lonOffset].join(',');
   if (_landCache.key !== key) {
     var span = lon1 - lon0, sy = R.h / (lat1 - lat0), paths = [];
@@ -877,37 +889,43 @@ function drawLand(ctx, R, lonEdges, lon0, lon1, lat0, lat1) {
     for (var pi = 0; pi < LAND.length; pi++) {
       var poly = LAND[pi];
       var ringsXY = poly.map(function (ring) {
-        var xs = [], ys = [], prevLon = null, cont = 0;
+        var xs = [], ys = [], pole = [], prevLon = null, cont = 0;
         for (var k2 = 0; k2 < ring.length; k2 += 2) {
           var lon = ring[k2], lat = ring[k2 + 1];
           if (prevLon == null) cont = lon;
           else cont += wrapMod(lon - prevLon + span / 2, span) - span / 2; // shortest-path unwrap
           prevLon = lon;
           xs.push(contPix(cont)); ys.push(R.y + R.h - (lat - lat0) * sy);
+          pole.push(Math.abs(lat) >= POLE_LAT);
         }
-        return { xs: xs, ys: ys };
+        return { xs: xs, ys: ys, pole: pole };
       });
-      // All three shift copies of this polygon go in *one* Path2D (filled and
-      // stroked once) rather than three separate fill()/stroke() calls: the
-      // copies never overlap (each is exactly one panel-width apart and the
-      // ring itself is at most one panel-width wide), so evenodd still comes
-      // out correct, but a landmass whose closing edge is exactly one full
-      // revolution wide — Antarctica's coastline is stored that way, closed
-      // via a traverse along the frame at the pole — has that edge fall
-      // exactly on the tile boundary between two copies. Drawing the copies
-      // as separate canvas calls left a hairline seam there (each call's
-      // antialiasing is independent); one combined call has none.
-      var path = new Path2D();
+      // All three shift copies of this polygon go in one fill Path2D (the
+      // copies never overlap — each is exactly one panel-width apart and the
+      // ring is at most one panel-width wide — so evenodd stays correct). The
+      // stroke path omits pole-closure segments (see the function comment).
+      var fillPath = new Path2D(), strokePath = new Path2D();
       for (var shift = -1; shift <= 1; shift++) {
         ringsXY.forEach(function (ring) {
-          for (var i = 0; i < ring.xs.length; i++) {
-            var px = ring.xs[i] + shift * R.w;
-            if (i === 0) path.moveTo(px, ring.ys[i]); else path.lineTo(px, ring.ys[i]);
+          var n = ring.xs.length, sx = shift * R.w;
+          for (var i = 0; i < n; i++) {
+            var px = ring.xs[i] + sx;
+            if (i === 0) fillPath.moveTo(px, ring.ys[i]); else fillPath.lineTo(px, ring.ys[i]);
           }
-          path.closePath();
+          fillPath.closePath();
+          // stroke: draw each real-coast segment; lift the pen across any
+          // segment with a pole endpoint so the pole-closure isn't outlined
+          var penDown = false;
+          for (var j = 0; j < n; j++) {
+            var k = (j + 1) % n;
+            if (ring.pole[j] || ring.pole[k]) { penDown = false; continue; }
+            var xj = ring.xs[j] + sx, xk = ring.xs[k] + sx;
+            if (!penDown) { strokePath.moveTo(xj, ring.ys[j]); penDown = true; }
+            strokePath.lineTo(xk, ring.ys[k]);
+          }
         });
       }
-      paths.push(path);
+      paths.push({ fill: fillPath, stroke: strokePath });
     }
     _landCache = { key: key, paths: paths };
   }
@@ -915,7 +933,7 @@ function drawLand(ctx, R, lonEdges, lon0, lon1, lat0, lat1) {
   ctx.beginPath(); ctx.rect(R.x, R.y, R.w, R.h); ctx.clip();
   ctx.fillStyle = LAND_FILL; ctx.strokeStyle = LAND_STROKE; ctx.lineWidth = 0.6; ctx.lineJoin = 'round';
   var ps = _landCache.paths;
-  for (var i = 0; i < ps.length; i++) { ctx.fill(ps[i], 'evenodd'); ctx.stroke(ps[i]); }
+  for (var i = 0; i < ps.length; i++) { ctx.fill(ps[i].fill, 'evenodd'); ctx.stroke(ps[i].stroke); }
   ctx.restore();
 }
 
