@@ -22,8 +22,8 @@ selection stays on each panel as a thin magenta rectangle.
   also **load your own NetCDF-4 file** from disk with the file picker.
 - **Pick the variable** to visualise from a dropdown.
 - **Linked box-averaging** across the two panels (see above).
-- **Optional marginal panels:** shrink either main heatmap to two-thirds of its
-  original width and height and use the freed space for quantitative line
+- **Optional marginal panels:** shrink either main heatmap to three-quarters of
+  its original width and height and use the freed space for quantitative line
   plots. The section gains an all-month selected-depth mean above and an
   all-depth selected-month mean to its right; the map gains analogous longitude
   and latitude profiles. For discontiguous selections, each profile uses the
@@ -186,7 +186,7 @@ are normally missing over land in the ocean product anyway).
 The marginal profile panels (commit `1a99741`) and weighted averaging /
 export provenance (commit `0be6996`) were reviewed line-by-line against the
 original feature request rather than just trusting that the tests pass.
-Verified precisely: the 2/3-shrink with bottom-left corner preserved; x-axis
+Verified precisely: the 3/4-shrink with bottom-left corner preserved; x-axis
 alignment of the top profile with the main panel and y-axis alignment of the
 side profile; the discontiguous-selection union rule (all months/longitudes
 plotted against the *union* of selected depth/latitude rows, not a per-column
