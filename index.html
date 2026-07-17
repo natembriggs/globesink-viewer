@@ -31,20 +31,12 @@
   #status { padding:6px 14px; border-top:1px solid var(--line); color:var(--muted); font-size:12px; min-height:26px; }
   .hint { color:var(--muted); font-size:11px; }
   a { color:var(--accent); }
-  #topbar { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:8px 14px; border-bottom:1px solid var(--line); }
-  #topbar .brand { font-weight:600; font-size:14px; }
-  .ext-btn { display:inline-block; padding:5px 12px; border:1px solid var(--accent); border-radius:6px; color:var(--accent); text-decoration:none; font-size:12px; font-weight:600; white-space:nowrap; }
-  .ext-btn:hover { background:var(--accent); color:#fff; }
   .dlrow { text-align:center; margin-top:2px; }
   .dlrow .dl { padding:2px 8px; font-size:11px; margin:0 2px; border:1px solid var(--line); border-radius:5px; background:#fff; cursor:pointer; }
   .dlrow .dl:hover { border-color:var(--accent); color:var(--accent); }
 </style>
 </head>
 <body>
-<div id="topbar">
-  <span class="brand">GLOBESINK viewer</span>
-  <a class="ext-btn" href="https://doi.org/10.5281/zenodo.19558504" target="_blank" rel="noopener">Full published dataset &amp; documentation ↗</a>
-</div>
 <header>
   <div class="grp">
     <label>Dataset</label>
@@ -58,7 +50,7 @@
       <span class="hint">or</span>
       <input type="file" id="fileIn" accept=".nc">
     </div>
-    <div class="hint">Built-in files have 8 core variables — load your own NetCDF for the full set.</div>
+    <div class="hint">Built-in files have 8 core variables — load your own NetCDF for the full set. Download latest full published dataset <a href="https://doi.org/10.5281/zenodo.19558504" target="_blank" rel="noopener">here</a>.</div>
   </div>
   <div class="grp"><label>Variable</label><select id="varSel"></select></div>
   <div class="grp"><label>Colormap</label>
