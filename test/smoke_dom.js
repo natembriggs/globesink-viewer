@@ -27,6 +27,7 @@ function ctxStub() {
     beginPath: noop, moveTo: noop, lineTo: noop, stroke: noop, fill: noop, fillText: noop,
     rect: noop, clip: noop, closePath: noop, setLineDash: noop,
     save: noop, restore: noop, translate: noop, rotate: noop, scale: noop,
+    measureText: function (s) { return { width: (s || '').length * 6 }; },
     createLinearGradient: function () { return { addColorStop: noop }; },
     fillStyle: '', strokeStyle: '', font: '', lineWidth: 1, lineJoin: '', textAlign: '', textBaseline: '' };
 }
@@ -79,7 +80,7 @@ try {
   var m = html.match(/<script>([\s\S]*?)<\/script>\s*<\/body>/);
   if (!m) throw new Error('could not extract inline script');
   // strict-mode eval keeps declarations local, so expose what we need to assert on
-  eval(m[1] + '\n;globalThis.__gv = { S: S, recomputeAll: recomputeAll, recomputeKeep: recomputeKeep, loadModelFromBuffer: loadModelFromBuffer, loadPublished: loadPublished, panelRects: panelRects, landLoaded: function(){ return LAND != null; }, csvSectionGrid: csvSectionGrid, csvMapLong: csvMapLong, jsonExport: jsonExport };');
+  eval(m[1] + '\n;globalThis.__gv = { S: S, recomputeAll: recomputeAll, recomputeKeep: recomputeKeep, loadModelFromBuffer: loadModelFromBuffer, loadPublished: loadPublished, panelRects: panelRects, landLoaded: function(){ return LAND != null; }, land: function(){ return LAND; }, csvSectionGrid: csvSectionGrid, csvMapLong: csvMapLong, jsonExport: jsonExport, draw: draw, buildRotatedAxis: buildRotatedAxis, axisPixelToDataCol: axisPixelToDataCol, wrapMod: wrapMod };');
   var G = globalThis.__gv, S = G.S;
   var recomputeAll = G.recomputeAll, recomputeKeep = G.recomputeKeep;
   // the app now starts blank; drive the file-load path directly
@@ -118,9 +119,9 @@ try {
     S.mapLatArr.length === S.model.sizes.lat && S.secMonthArr.some(function(v){return isFinite(v);}));
   S.weightMode = 'physical'; recomputeAll();
   var pr = G.panelRects({x:10,y:20,w:300,h:180}, true);
-  chk('main panel shrinks by one third', pr.main.w === 200 && pr.main.h === 120);
+  chk('main panel shrinks to three-quarters', pr.main.w === 225 && pr.main.h === 135);
   chk('main bottom-left preserved', pr.main.x === 10 && pr.main.y + pr.main.h === 200);
-  chk('marginals fill removed space', pr.top.w === 200 && pr.top.h === 60 && pr.side.w === 100 && pr.side.h === 120);
+  chk('marginals fill removed space', pr.top.w === 225 && pr.top.h === 31 && pr.side.w === 61 && pr.side.h === 135);
   // simulate a section drag -> rectangle depth 0..2 x months 3..7
   var nMx = S.model.sizes.month;
   S.boxTD = { anchor: [0, 3], active: [2, 7], set: GVCore.selRectSet([0, 3], [2, 7], nMx) }; recomputeAll();
@@ -145,6 +146,74 @@ try {
   chk('discontiguous latitude union', unionLL.rows.join(',') === '0,2');
   chk('latitude union applied to all longitudes', S.mapLonArr.length === nXx && S.mapLonArr.some(function(v){return isFinite(v);}));
   chk('land overlay loaded + drawn', G.landLoaded && G.landLoaded());
+
+  // ---- wrap-around panning (drag-to-recentre the month/longitude axes) ----
+  // buildRotatedAxis: a rotated axis should still span exactly the panel
+  // width, place data column `offset` at the left edge, and every data
+  // column's pixel->column round trip should recover the original column.
+  (function () {
+    var R = { x: 100, y: 0, w: 360, h: 10 }, N = 12, offset = 5;
+    var axis = G.buildRotatedAxis(R, N, offset, function () { return R.w / N; });
+    chk('rotated axis spans full panel width', Math.abs(axis.edges[N] - (R.x + R.w)) < 1e-9);
+    chk('rotated axis left edge at R.x', axis.edges[0] === R.x);
+    chk('offset column starts at the left edge', axis.leftPix(offset) === R.x);
+    var roundTripOk = true;
+    for (var dc = 0; dc < N; dc++) {
+      var mid = (axis.leftPix(dc) + axis.rightPix(dc)) / 2;
+      if (G.axisPixelToDataCol(axis, mid) !== dc) roundTripOk = false;
+    }
+    chk('pixel -> data column round-trips for every column', roundTripOk);
+    chk('ghost points sit one bin outside the panel', axis.ghostLeftPix() < R.x && axis.ghostRightPix() > R.x + R.w);
+    var zeroAxis = G.buildRotatedAxis(R, N, 0, function () { return R.w / N; });
+    chk('zero offset matches unrotated layout', zeroAxis.leftPix(0) === R.x && Math.abs(zeroAxis.rightPix(N - 1) - (R.x + R.w)) < 1e-9);
+    chk('wrapMod normalises negative and overflowing indices', G.wrapMod(-1, 12) === 11 && G.wrapMod(13, 12) === 1);
+  })();
+  // Panning must not touch the selection or the underlying reduced arrays —
+  // only S.monthOffset/S.lonOffset and the redraw.
+  var secArrBefore = S.secArr.slice(), mapArrBefore = S.mapArr.slice(), boxTDBefore = JSON.stringify(S.boxTD.set);
+  S.monthOffset = 7; S.lonOffset = 20; G.draw();
+  chk('panning leaves secArr unchanged', S.secArr.every(function (v, i) { return isNaN(v) ? isNaN(secArrBefore[i]) : v === secArrBefore[i]; }));
+  chk('panning leaves mapArr unchanged', S.mapArr.every(function (v, i) { return isNaN(v) ? isNaN(mapArrBefore[i]) : v === mapArrBefore[i]; }));
+  chk('panning leaves selection unchanged', JSON.stringify(S.boxTD.set) === boxTDBefore);
+  // exports must stay in canonical (unrotated) order regardless of pan state
+  chk('CSV export unaffected by pan (still canonical month order)', G.csvSectionGrid().indexOf('depth_m,Jan,') >= 0);
+
+  // A ring that circles a pole (Antarctica) straddles the antimeridian at
+  // almost every pan offset — this regression-tests the continuous-longitude
+  // projection used to draw it, on the real coastline data, against the
+  // exact bug found in review: a vertex sitting exactly on the lon0/lon1
+  // boundary (e.g. lon===180) used to snap a full window-width away from its
+  // neighbours because the old projection re-derived each vertex's "window
+  // wrap count" independently instead of accumulating one continuous value.
+  (function () {
+    var land = G.land();
+    var widest = null;
+    land.forEach(function (poly) {
+      poly.forEach(function (ring) {
+        var lo = Infinity, hi = -Infinity;
+        for (var i = 0; i < ring.length; i += 2) { if (ring[i] < lo) lo = ring[i]; if (ring[i] > hi) hi = ring[i]; }
+        if (!widest || (hi - lo) > widest.span) widest = { ring: ring, span: hi - lo };
+      });
+    });
+    chk('found a circumpolar-width ring to stress-test', widest && widest.span > 300);
+    var R = { x: 0, w: 900 }, span = 360, nX = S.model.sizes.lon;
+    [0, Math.floor(nX / 4), Math.floor(nX / 2), nX - 1].forEach(function (offset) {
+      var lonEdges = S.model.coords.lonEdges, lonAtOffset = lonEdges[offset];
+      var contPix = function (v) { return R.x + ((v - lonAtOffset) / span) * R.w; };
+      var ring = widest.ring, prevLon = null, cont = 0, prevX = null, maxJump = 0;
+      for (var k = 0; k < ring.length; k += 2) {
+        var lon = ring[k];
+        if (prevLon == null) cont = lon;
+        else cont += G.wrapMod(lon - prevLon + span / 2, span) - span / 2;
+        prevLon = lon;
+        var x = contPix(cont);
+        if (prevX != null) maxJump = Math.max(maxJump, Math.abs(x - prevX));
+        prevX = x;
+      }
+      chk('circumpolar ring has no seam jump at lonOffset=' + offset, maxJump < R.w * 0.1);
+    });
+  })();
+  S.monthOffset = 0; S.lonOffset = 0; G.draw();
   // published-dataset load path: fetch a repo-hosted file -> parse -> render
   G.loadPublished('data/GLOBESINK_monthly_climatologies_smoothed_interpolated_minimal.nc');
   chk('published dataset loads (8 vars)', S.model && S.model.varNames.length === 8);

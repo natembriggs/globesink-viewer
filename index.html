@@ -103,7 +103,7 @@
   <div class="panelwrap">
     <h3 id="secTitle">time × depth section</h3>
     <canvas id="secCanvas"></canvas>
-    <div class="hint" style="text-align:center">Click/drag to select (updates the map live). Shift+click extends; ⌘/Ctrl+click adds/removes a cell. Arrows move the box (←/→ wrap months); Shift+arrows resize it.</div>
+    <div class="hint" style="text-align:center">Click/drag to select (updates the map live). Shift+click extends; ⌘/Ctrl+click adds/removes a cell. Arrows move the box (←/→ wrap months); Shift+arrows resize it. Drag the month labels below the panel to pan which month starts the axis.</div>
     <div class="dlrow">Download this panel:
       <button class="dl" data-plot="section" data-fmt="csvgrid">CSV grid</button>
       <button class="dl" data-plot="section" data-fmt="csvlong">CSV long</button>
@@ -113,7 +113,7 @@
   <div class="panelwrap">
     <h3 id="mapTitle">map</h3>
     <canvas id="mapCanvas"></canvas>
-    <div class="hint" style="text-align:center">Click/drag to select (updates the section live). Shift+click extends; ⌘/Ctrl+click adds/removes a cell. Arrows move the box (←/→ wrap longitude); Shift+arrows resize it.</div>
+    <div class="hint" style="text-align:center">Click/drag to select (updates the section live). Shift+click extends; ⌘/Ctrl+click adds/removes a cell. Arrows move the box (←/→ wrap longitude); Shift+arrows resize it. Drag the longitude labels below the panel to pan (e.g. to centre the Pacific).</div>
     <div class="dlrow">Download this panel:
       <button class="dl" data-plot="map" data-fmt="csvgrid">CSV grid</button>
       <button class="dl" data-plot="map" data-fmt="csvlong">CSV long</button>
@@ -168,6 +168,8 @@ var S = {
   autoRange: true, linkScales: true, vmin: 0, vmax: 1,
   secLim: [0, 1], mapLim: [0, 1],
   secMonthLim: [0, 1], secDepthLim: [0, 1], mapLonLim: [0, 1], mapLatLim: [0, 1],
+  monthOffset: 0,  // data-month index shown at the left edge of the section panel (drag its bottom axis to pan)
+  lonOffset: 0,    // data-lon index shown at the left edge of the map panel (drag its bottom axis to pan)
   boxLL: null,  // {set,anchor,active} lat/lon cells (row=lat,col=lon) -> drives section; drawn on map
   boxTD: null,  // {set,anchor,active} depth/month cells (row=depth,col=month) -> drives map; drawn on section
   focus: null,  // 'section' | 'map' — last-clicked plot; receives arrow keys
@@ -217,6 +219,7 @@ function loadModelFromBuffer(ab, name, source) {
     // defaults: section = whole globe; map = annual, depth bin index 1 (10-50 m)
     var nY = model.sizes.lat, nX = model.sizes.lon, nP = model.sizes.depth, nM = model.sizes.month;
     var d1 = Math.min(1, nP - 1);
+    S.monthOffset = 0; S.lonOffset = 0;
     S.boxLL = { anchor: [0, 0], active: [nY - 1, nX - 1], set: GVCore.selRectSet([0, 0], [nY - 1, nX - 1], nX) };
     S.boxTD = { anchor: [d1, 0], active: [d1, nM - 1], set: GVCore.selRectSet([d1, 0], [d1, nM - 1], nM) };
     rebuildCondVarOptions();
@@ -583,8 +586,12 @@ function setupCanvas(cv, cssW, cssH) {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   return ctx;
 }
-function plotRect(cssW, cssH) {
-  return { x: MARG.l, y: MARG.t, w: cssW - MARG.l - MARG.r, h: cssH - MARG.t - MARG.b };
+function plotRect(cssW, cssH, profilesOn) {
+  // When marginal panels are shown, reserve a thin strip above the plot area
+  // (same height as the existing top/side panel gap) so each marginal panel
+  // can carry its own title just outside its top-left corner.
+  var extraTop = profilesOn ? PROFILE_GAP : 0;
+  return { x: MARG.l, y: MARG.t + extraTop, w: cssW - MARG.l - MARG.r, h: cssH - MARG.t - extraTop - MARG.b };
 }
 function panelRects(R, profilesOn) {
   if (!profilesOn) return { main:R, top:null, side:null, corner:null };
@@ -598,19 +605,66 @@ function panelRects(R, profilesOn) {
   };
 }
 
-function drawCells(ctx, R, cols, rows, xEdgePix, yEdgePix, valueAt, lim) {
+function drawCells(ctx, R, cols, rows, colAxis, yEdgePix, valueAt, lim) {
   for (var r = 0; r < rows; r++) {
     for (var c = 0; c < cols; c++) {
       var v = valueAt(r, c);
       var col;
       if (isNaN(v)) col = MISSING_COLOR;
       else { var t = norm(v, lim[0], lim[1]); col = isNaN(t) ? MISSING_COLOR : ramp(CMAPS[S.cmap], t); }
-      var x0 = xEdgePix(c), x1 = xEdgePix(c + 1), y0 = yEdgePix(r), y1 = yEdgePix(r + 1);
+      var x0 = colAxis.leftPix(c), x1 = colAxis.rightPix(c), y0 = yEdgePix(r), y1 = yEdgePix(r + 1);
       ctx.fillStyle = 'rgb(' + (col[0]|0) + ',' + (col[1]|0) + ',' + (col[2]|0) + ')';
       ctx.fillRect(Math.floor(Math.min(x0,x1)), Math.floor(Math.min(y0,y1)),
                    Math.ceil(Math.abs(x1-x0))+1, Math.ceil(Math.abs(y1-y0))+1);
     }
   }
+}
+
+// ---------- wrap-around column axes (month / longitude panning) ----------
+// The section and map panels can be panned along their bottom (wrapping)
+// axis by dragging the tick-label strip; this only changes which data column
+// renders at the panel's left edge, not the underlying data or selection
+// (those stay indexed in canonical data order throughout, so exports are
+// unaffected). `buildRotatedAxis` turns a data-column index into a rotated
+// pixel position; `origWidth(dataCol)` is that column's *unrotated* pixel
+// width, so irregular grids are handled correctly too.
+function wrapMod(v, n) { return ((v % n) + n) % n; }
+function buildRotatedAxis(R, N, offset, origWidth) {
+  var edges = new Float64Array(N + 1);
+  edges[0] = R.x;
+  var order = new Array(N);
+  for (var slot = 0; slot < N; slot++) {
+    var dataCol = (offset + slot) % N;
+    order[slot] = dataCol;
+    edges[slot + 1] = edges[slot] + origWidth(dataCol);
+  }
+  return {
+    edges: edges, order: order,
+    slotOf: function (c) { return wrapMod(c - offset, N); },
+    leftPix: function (c) { return edges[wrapMod(c - offset, N)]; },
+    rightPix: function (c) { return edges[wrapMod(c - offset, N) + 1]; },
+    // one-bin extensions just outside [R.x, R.x+R.w], for the wrap-around
+    // connector line drawn on the top marginal panel
+    ghostLeftPix: function () { return edges[0] - origWidth(order[N - 1]); },
+    ghostRightPix: function () { return edges[N] + origWidth(order[0]); }
+  };
+}
+// Pixel position of an arbitrary (non grid-aligned) axis value, e.g. a fixed
+// tick like 0deg or a coastline vertex — interpolated within its containing,
+// rotation-aware cell.
+function axisValuePix(axis, edges, v) {
+  var c = GVCore.cellIndexForValue(edges, v);
+  var frac = (v - edges[c]) / (edges[c + 1] - edges[c]);
+  var l = axis.leftPix(c), r = axis.rightPix(c);
+  return l + frac * (r - l);
+}
+// Inverse of the rotated axis: which data column does a pixel fall in.
+function axisPixelToDataCol(axis, px) {
+  var e = axis.edges, N = axis.order.length;
+  if (px <= e[0]) return axis.order[0];
+  if (px >= e[N]) return axis.order[N - 1];
+  for (var slot = 0; slot < N; slot++) if (px < e[slot + 1]) return axis.order[slot];
+  return axis.order[N - 1];
 }
 function axisStyle(ctx){ ctx.fillStyle='#333'; ctx.strokeStyle='#888'; ctx.font='11px sans-serif'; ctx.lineWidth=1; }
 function frame(ctx,R){ ctx.strokeStyle='#333'; ctx.lineWidth=1; ctx.strokeRect(R.x+.5,R.y+.5,R.w,R.h); }
@@ -618,29 +672,38 @@ function valueAtFrac(lim, frac) {
   return S.log ? Math.exp(Math.log(lim[0]) + frac * (Math.log(lim[1]) - Math.log(lim[0]))) :
     lim[0] + frac * (lim[1] - lim[0]);
 }
-function drawProfilePath(ctx, values, posAt, valuePix, R) {
+function drawProfilePathXY(ctx, R, xs, values, valuePix) {
   ctx.save(); ctx.beginPath(); ctx.rect(R.x, R.y, R.w, R.h); ctx.clip();
   ctx.beginPath(); ctx.strokeStyle = profileLineColor(); ctx.lineWidth = 2; ctx.lineJoin = 'round';
   var started = false;
-  for (var i = 0; i < values.length; i++) {
-    var v = values[i], vp = valuePix(v);
-    if (isNaN(vp)) { started = false; continue; }
-    var p = posAt(i);
-    if (started) ctx.lineTo(p[0], p[1] == null ? vp : p[1]);
-    else { ctx.moveTo(p[0], p[1] == null ? vp : p[1]); started = true; }
+  for (var i = 0; i < xs.length; i++) {
+    var vp = valuePix(values[i]);
+    if (isNaN(vp) || isNaN(xs[i])) { started = false; continue; }
+    if (started) ctx.lineTo(xs[i], vp); else { ctx.moveTo(xs[i], vp); started = true; }
   }
   ctx.stroke(); ctx.restore();
 }
-function drawTopProfile(ctx, R, values, xCenter, lim) {
+// Top marginal panels (month / longitude) plot every data column of the axis
+// even when only some are selected, so the two ends of the axis are genuine
+// neighbours (Dec wraps to Jan; the antimeridian wraps to itself). We add one
+// "ghost" point just past each end of the rotated axis — the far end's value,
+// drawn off-panel and clipped — so a value present at both ends draws as a
+// continuous wrap-around curve instead of stopping dead at the panel edge.
+function drawTopProfile(ctx, R, values, axis, lim, selIdx) {
   frame(ctx, R); axisStyle(ctx);
+  if (selIdx) drawTopSelBox(ctx, R, selIdx, axis);
   var yPix = function(v){ var t = norm(v, lim[0], lim[1]); return isNaN(t) ? NaN : R.y + (1 - t) * R.h; };
-  drawProfilePath(ctx, values, function(i){ return [xCenter(i), null]; }, yPix, R);
+  var N = axis.order.length, xs = [axis.ghostLeftPix()], ys = [values[axis.order[N - 1]]];
+  for (var slot = 0; slot < N; slot++) { var dc = axis.order[slot]; xs.push((axis.leftPix(dc) + axis.rightPix(dc)) / 2); ys.push(values[dc]); }
+  xs.push(axis.ghostRightPix()); ys.push(values[axis.order[0]]);
+  drawProfilePathXY(ctx, R, xs, ys, yPix);
   ctx.textAlign='right'; ctx.textBaseline='middle';
   [0,0.5,1].forEach(function(f){ var yy=R.y+(1-f)*R.h; ctx.beginPath();ctx.moveTo(R.x-3,yy);ctx.lineTo(R.x,yy);ctx.stroke();ctx.fillText(fmtNum(valueAtFrac(lim,f)),R.x-5,yy); });
   ctx.save(); ctx.translate(11,R.y+R.h/2); ctx.rotate(-Math.PI/2); ctx.textBaseline='middle'; ctx.font='9px sans-serif'; drawLabelWithSup(ctx, varLabel(), 0, 0, 'center'); ctx.restore();
 }
-function drawSideProfile(ctx, R, values, yCenter, lim, isDepthProfile) {
+function drawSideProfile(ctx, R, values, yCenter, lim, isDepthProfile, selIdx, yEdgePix, nRows) {
   frame(ctx, R); axisStyle(ctx);
+  if (selIdx) drawSideSelBox(ctx, R, selIdx, yEdgePix, nRows);
   var xPix = function(v){ var t = norm(v, lim[0], lim[1]); return isNaN(t) ? NaN : R.x + t * R.w; };
   // Draw the Martin curve first so it sits behind the data line.
   if (isDepthProfile && S.varName === 'flux_POC' && S.secDepthArr) drawMartinCurve(ctx, R, S.secDepthArr, S.model, yCenter, lim, xPix);
@@ -712,14 +775,43 @@ function drawMartinCurve(ctx, R, depthArr, model, yCenter, lim, xPix) {
   ctx.font = mainFont; ctx.fillText(mainText, startX, baseY);
   ctx.font = supFont; ctx.fillText(supText, startX + mainW, baseY - 4);
 }
-// Notes ('selected-depth mean' etc.) sit in the unused corner square between
-// the two marginal panels: the top-panel note hugs the top, the side-panel
-// note drops to the bottom so each label sits next to the panel it describes.
-function drawCornerNotes(ctx, R, topNote, sideNote) {
-  if (!R || R.w <= 0 || R.h <= 0) return;
-  ctx.fillStyle='#6a7078'; ctx.font='9px sans-serif'; ctx.textAlign='left';
-  ctx.textBaseline='top';    ctx.fillText(topNote,  R.x + 2, R.y + 2);
-  ctx.textBaseline='bottom'; ctx.fillText(sideNote, R.x + 2, R.y + R.h - 2);
+// Marginal-panel title, sitting just outside the panel's own top-left corner
+// (mirroring how the main-panel titles sit above their canvas) so it reads
+// unambiguously as that one panel's label, not a shared caption.
+function drawPanelLabel(ctx, x, panelTop, text) {
+  ctx.save();
+  ctx.fillStyle = '#51565d'; ctx.font = '10px sans-serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'bottom';
+  ctx.fillText(text, x, panelTop - 3);
+  ctx.restore();
+}
+// Highlight, on a marginal panel, which part of its own axis is inside the
+// selection that drives the other panel — drawn as an inset box (not a line
+// to the panel edges) so wrapped/discontiguous selections read as distinct
+// "inside" regions rather than one continuous span. Skipped when the whole
+// axis is selected (the default), since there's nothing to distinguish.
+function drawTopSelBox(ctx, R, dataIdx, axis) {
+  var N = axis.order.length;
+  if (!dataIdx.length || dataIdx.length >= N) return;
+  var slots = dataIdx.map(function (c) { return axis.slotOf(c); });
+  var runs = GVCore.runsFromIdx(slots), inset = 3;
+  ctx.save(); ctx.fillStyle = selColor(0.12); ctx.strokeStyle = selColor(0.85); ctx.lineWidth = 1.5; ctx.setLineDash([]);
+  runs.forEach(function (r) {
+    var lo = axis.edges[r[0]], hi = axis.edges[r[1] + 1];
+    ctx.fillRect(lo, R.y + inset, hi - lo, R.h - 2 * inset);
+    ctx.strokeRect(lo + 0.5, R.y + inset + 0.5, Math.max(0, hi - lo - 1), Math.max(0, R.h - 2 * inset - 1));
+  });
+  ctx.restore();
+}
+function drawSideSelBox(ctx, R, dataIdx, yEdgePix, nRows) {
+  if (!dataIdx.length || dataIdx.length >= nRows) return;
+  var runs = GVCore.runsFromIdx(dataIdx), inset = 3;
+  ctx.save(); ctx.fillStyle = selColor(0.12); ctx.strokeStyle = selColor(0.85); ctx.lineWidth = 1.5; ctx.setLineDash([]);
+  runs.forEach(function (r) {
+    var a = yEdgePix(r[0]), b = yEdgePix(r[1] + 1), lo = Math.min(a, b), hi = Math.max(a, b);
+    ctx.fillRect(R.x + inset, lo, R.w - 2 * inset, hi - lo);
+    ctx.strokeRect(R.x + inset + 0.5, lo + 0.5, Math.max(0, R.w - 2 * inset - 1), Math.max(0, hi - lo - 1));
+  });
+  ctx.restore();
 }
 
 function drawColorbar(ctx, cssW, R, label, lim) {
@@ -752,22 +844,68 @@ function loadLand() {
 }
 
 // Filled land polygons (opaque, so they hide the data beneath) with coastline
-// outlines, projected the same way as the data grid. Cached per geometry so
-// dragging stays smooth. Holes (inland water) are cut out via even-odd fill.
-function drawLand(ctx, R, lon0, lon1, lat0, lat1) {
+// outlines, honouring the current longitude pan. Cached per geometry so
+// dragging stays smooth. Holes (inland water) are cut out via even-odd fill
+// (each polygon's rings share one Path2D so the hole cancels correctly).
+//
+// Panning moves the antimeridian seam to an arbitrary longitude, so a ring
+// that straddles it (Antarctica straddles it at almost every rotation) can no
+// longer be projected by naively wrapping each vertex into the current
+// window: two real-world-adjacent vertices on opposite sides of the seam
+// would land at opposite ends of the panel, and — because canvas fill()
+// implicitly closes any open subpath with a straight line — that produces a
+// spurious wedge connecting them. Instead each ring's longitudes are
+// *unwrapped* first (a running continuous value, not modded back into
+// -180..180 between vertices), so its path is one smooth, un-broken line
+// with no artificial jump; that ring is then drawn three times, offset by
+// -R.w, 0 and +R.w (one full 360deg of pixels each), so whichever copy
+// actually falls inside the panel is the one the clip lets through.
+function drawLand(ctx, R, lonEdges, lon0, lon1, lat0, lat1) {
   if (!LAND) return;
-  var key = [R.x, R.y, R.w, R.h, lon0, lon1, lat0, lat1].join(',');
+  var key = [R.x, R.y, R.w, R.h, lon0, lon1, lat0, lat1, S.lonOffset].join(',');
   if (_landCache.key !== key) {
-    var sx = R.w / (lon1 - lon0), sy = R.h / (lat1 - lat0), paths = [];
+    var span = lon1 - lon0, sy = R.h / (lat1 - lat0), paths = [];
+    // A simple linear (not axisValuePix-based) projection here: axisValuePix
+    // clamps/branches at the [lon0,lon1) boundary, which is exactly wrong for
+    // a value meant to accumulate smoothly across many revolutions — it made
+    // vertices sitting exactly on that boundary (lon===180, which real
+    // coastlines do hit) snap a full window-width away from their neighbours.
+    // This assumes uniform-width longitude bins (true for this grid), same as
+    // the rest of the panning feature.
+    var lonAtOffset = lonEdges[S.lonOffset];
+    var contPix = function (v) { return R.x + ((v - lonAtOffset) / span) * R.w; };
     for (var pi = 0; pi < LAND.length; pi++) {
-      var poly = LAND[pi], path = new Path2D();
-      for (var ri = 0; ri < poly.length; ri++) {
-        var ring = poly[ri];
-        for (var k = 0; k < ring.length; k += 2) {
-          var px = R.x + (ring[k] - lon0) * sx, py = R.y + R.h - (ring[k + 1] - lat0) * sy;
-          if (k === 0) path.moveTo(px, py); else path.lineTo(px, py);
+      var poly = LAND[pi];
+      var ringsXY = poly.map(function (ring) {
+        var xs = [], ys = [], prevLon = null, cont = 0;
+        for (var k2 = 0; k2 < ring.length; k2 += 2) {
+          var lon = ring[k2], lat = ring[k2 + 1];
+          if (prevLon == null) cont = lon;
+          else cont += wrapMod(lon - prevLon + span / 2, span) - span / 2; // shortest-path unwrap
+          prevLon = lon;
+          xs.push(contPix(cont)); ys.push(R.y + R.h - (lat - lat0) * sy);
         }
-        path.closePath();
+        return { xs: xs, ys: ys };
+      });
+      // All three shift copies of this polygon go in *one* Path2D (filled and
+      // stroked once) rather than three separate fill()/stroke() calls: the
+      // copies never overlap (each is exactly one panel-width apart and the
+      // ring itself is at most one panel-width wide), so evenodd still comes
+      // out correct, but a landmass whose closing edge is exactly one full
+      // revolution wide — Antarctica's coastline is stored that way, closed
+      // via a traverse along the frame at the pole — has that edge fall
+      // exactly on the tile boundary between two copies. Drawing the copies
+      // as separate canvas calls left a hairline seam there (each call's
+      // antialiasing is independent); one combined call has none.
+      var path = new Path2D();
+      for (var shift = -1; shift <= 1; shift++) {
+        ringsXY.forEach(function (ring) {
+          for (var i = 0; i < ring.xs.length; i++) {
+            var px = ring.xs[i] + shift * R.w;
+            if (i === 0) path.moveTo(px, ring.ys[i]); else path.lineTo(px, ring.ys[i]);
+          }
+          path.closePath();
+        });
       }
       paths.push(path);
     }
@@ -800,25 +938,29 @@ function profileLineColor() {
 // Outline the union boundary of a cell set: for each selected cell, draw only
 // the edges where the neighbour isn't also selected. Handles rectangles,
 // wrapped columns, and discontiguous (ctrl-click) selections uniformly.
-// colPix/rowPix map a column/row index to its left/top pixel edge.
-function drawCellSetOutline(ctx, set, NC, colPix, rowPix) {
+// colAxis gives a column's own left/right pixel edges (rotation-aware, so a
+// panned panel's border always falls at the true visual seam rather than at
+// the fixed data-index 0/NC-1 boundary); rowPix maps a row index to its top
+// pixel edge (rows never pan, so it keeps the simple r/r+1 convention).
+function drawCellSetOutline(ctx, set, NC, colAxis, rowPix) {
   ctx.save();
   ctx.strokeStyle = selColor(0.95); ctx.lineWidth = 1.5; ctx.setLineDash([]);
   ctx.beginPath();
   for (var k in set) {
     var e = +k, r = Math.floor(e / NC), c = e % NC;
-    var x0 = colPix(c), x1 = colPix(c + 1), y0 = rowPix(r), y1 = rowPix(r + 1);
-    if (!(r > 0 && set[(r - 1) * NC + c]))     { ctx.moveTo(x0, y0); ctx.lineTo(x1, y0); } // top
-    if (!set[(r + 1) * NC + c])                { ctx.moveTo(x0, y1); ctx.lineTo(x1, y1); } // bottom
-    if (!(c > 0 && set[r * NC + (c - 1)]))     { ctx.moveTo(x0, y0); ctx.lineTo(x0, y1); } // left
-    if (!(c < NC - 1 && set[r * NC + (c + 1)])){ ctx.moveTo(x1, y0); ctx.lineTo(x1, y1); } // right
+    var x0 = colAxis.leftPix(c), x1 = colAxis.rightPix(c), y0 = rowPix(r), y1 = rowPix(r + 1);
+    var slot = colAxis.slotOf(c), cPrev = (c - 1 + NC) % NC, cNext = (c + 1) % NC;
+    if (!(r > 0 && set[(r - 1) * NC + c]))       { ctx.moveTo(x0, y0); ctx.lineTo(x1, y0); } // top
+    if (!set[(r + 1) * NC + c])                  { ctx.moveTo(x0, y1); ctx.lineTo(x1, y1); } // bottom
+    if (!(slot > 0 && set[r * NC + cPrev]))      { ctx.moveTo(x0, y0); ctx.lineTo(x0, y1); } // left
+    if (!(slot < NC - 1 && set[r * NC + cNext])) { ctx.moveTo(x1, y0); ctx.lineTo(x1, y1); } // right
   }
   ctx.stroke(); ctx.restore();
 }
 // Dashed, inset outline marking the anchor cell (the drag/extend origin).
-function drawAnchorCell(ctx, anchor, NC, colPix, rowPix) {
+function drawAnchorCell(ctx, anchor, NC, colAxis, rowPix) {
   if (!anchor) return;
-  var x0 = colPix(anchor[1]), x1 = colPix(anchor[1] + 1), y0 = rowPix(anchor[0]), y1 = rowPix(anchor[0] + 1);
+  var x0 = colAxis.leftPix(anchor[1]), x1 = colAxis.rightPix(anchor[1]), y0 = rowPix(anchor[0]), y1 = rowPix(anchor[0] + 1);
   var x = Math.min(x0, x1), y = Math.min(y0, y1), w = Math.abs(x1 - x0), h = Math.abs(y1 - y0);
   ctx.save();
   ctx.strokeStyle = selColor(0.9); ctx.lineWidth = 1; ctx.setLineDash([3, 2]);
@@ -831,31 +973,33 @@ var secGeom = null;
 function drawSection(sharedH) {
   var cv = document.getElementById('secCanvas');
   var cssW = cv.parentElement.clientWidth, cssH = sharedH || Math.max(300, Math.round(cssW * 0.7));
-  var ctx = setupCanvas(cv, cssW, cssH), parts = panelRects(plotRect(cssW, cssH), S.secProfiles), R = parts.main;
+  var ctx = setupCanvas(cv, cssW, cssH), parts = panelRects(plotRect(cssW, cssH, S.secProfiles), S.secProfiles), R = parts.main;
   var m = S.model, nP = m.sizes.depth, nM = m.sizes.month;
   var dTop = m.coords.depthEdges[0], dBot = m.coords.depthEdges[nP];
-  var xEdgePix = function (c) { return R.x + (c / nM) * R.w; };
+  var monthAxis = buildRotatedAxis(R, nM, S.monthOffset, function () { return R.w / nM; });
   var yEdgePix = function (r) { return R.y + ((m.coords.depthEdges[r] - dTop) / (dBot - dTop)) * R.h; };
   ctx.clearRect(0,0,cssW,cssH);
-  drawCells(ctx, R, nM, nP, xEdgePix, yEdgePix, function (r, c) { return S.secArr[r * nM + c]; }, S.secLim);
+  drawCells(ctx, R, nM, nP, monthAxis, yEdgePix, function (r, c) { return S.secArr[r * nM + c]; }, S.secLim);
   frame(ctx, R);
   // axes
   axisStyle(ctx); ctx.textAlign='center'; ctx.textBaseline='top';
-  for (var mi = 0; mi < nM; mi++) ctx.fillText(MONTHS[mi], (xEdgePix(mi)+xEdgePix(mi+1))/2, R.y+R.h+5);
+  for (var mi = 0; mi < nM; mi++) ctx.fillText(MONTHS[mi], (monthAxis.leftPix(mi)+monthAxis.rightPix(mi))/2, R.y+R.h+5);
   ctx.textAlign='right'; ctx.textBaseline='middle';
   var dticks=[0,200,400,600,800,1000,1200,1400,1600,1800,2000];
   dticks.forEach(function(dv){ if(dv>=dTop&&dv<=dBot){ var yy=R.y+((dv-dTop)/(dBot-dTop))*R.h; ctx.beginPath();ctx.moveTo(R.x-3,yy);ctx.lineTo(R.x,yy);ctx.stroke(); ctx.fillText(dv, R.x-6, yy);} });
   ctx.save(); ctx.translate(14, R.y+R.h/2); ctx.rotate(-Math.PI/2); ctx.textAlign='center'; ctx.textBaseline='middle'; ctx.fillText('depth (m)',0,0); ctx.restore();
   drawColorbar(ctx, cssW, R, varLabel(), S.secLim);
   if (S.secProfiles) {
-    drawTopProfile(ctx, parts.top, S.secMonthArr, function(i){ return (xEdgePix(i)+xEdgePix(i+1))/2; }, S.secMonthLim);
-    drawSideProfile(ctx, parts.side, S.secDepthArr, function(i){ return (yEdgePix(i)+yEdgePix(i+1))/2; }, S.secDepthLim, true);
-    drawCornerNotes(ctx, parts.corner, 'selected-depth mean', 'selected-month mean');
+    var rcTD = GVCore.selRowsCols(S.boxTD.set, nM);
+    drawTopProfile(ctx, parts.top, S.secMonthArr, monthAxis, S.secMonthLim, rcTD.cols);
+    drawSideProfile(ctx, parts.side, S.secDepthArr, function(i){ return (yEdgePix(i)+yEdgePix(i+1))/2; }, S.secDepthLim, true, rcTD.rows, yEdgePix, nP);
+    drawPanelLabel(ctx, parts.top.x, parts.top.y, 'mean ' + depthRunsLabel(rcTD.rows));
+    drawPanelLabel(ctx, parts.side.x, parts.side.y, 'mean ' + monthRunsLabel(rcTD.cols));
   }
   // selection cells (depth=row, month=col) that drive the map + anchor marker
-  drawCellSetOutline(ctx, S.boxTD.set, nM, xEdgePix, yEdgePix);
-  drawAnchorCell(ctx, S.boxTD.anchor, nM, xEdgePix, yEdgePix);
-  secGeom = { R:R, cv:cv, xEdgePix:xEdgePix, yEdgePix:yEdgePix, nCols:nM, nRows:nP };
+  drawCellSetOutline(ctx, S.boxTD.set, nM, monthAxis, yEdgePix);
+  drawAnchorCell(ctx, S.boxTD.anchor, nM, monthAxis, yEdgePix);
+  secGeom = { R:R, cv:cv, colAxis: monthAxis };
 }
 
 // ----- map panel (right): x=lon, y=lat -----
@@ -863,30 +1007,37 @@ var mapGeom = null;
 function drawMap(sharedH) {
   var cv = document.getElementById('mapCanvas');
   var cssW = cv.parentElement.clientWidth, cssH = sharedH || Math.max(300, Math.round(cssW * 0.7));
-  var ctx = setupCanvas(cv, cssW, cssH), parts = panelRects(plotRect(cssW, cssH), S.mapProfiles), R = parts.main;
+  var ctx = setupCanvas(cv, cssW, cssH), parts = panelRects(plotRect(cssW, cssH, S.mapProfiles), S.mapProfiles), R = parts.main;
   var m = S.model, nY = m.sizes.lat, nX = m.sizes.lon;
   var latE = m.coords.latEdges, lonE = m.coords.lonEdges;
   var lat0 = latE[0], lat1 = latE[nY], lon0 = lonE[0], lon1 = lonE[nX];
-  var xEdgePix = function (c) { return R.x + ((lonE[c] - lon0) / (lon1 - lon0)) * R.w; };
+  var origLonPix = function (c) { return R.x + ((lonE[c] - lon0) / (lon1 - lon0)) * R.w; };
+  var lonAxis = buildRotatedAxis(R, nX, S.lonOffset, function (c) { return origLonPix(c + 1) - origLonPix(c); });
   var yEdgePix = function (r) { return R.y + (1 - (latE[r] - lat0) / (lat1 - lat0)) * R.h; }; // lat up
   ctx.clearRect(0,0,cssW,cssH);
-  drawCells(ctx, R, nX, nY, xEdgePix, yEdgePix, function (r, c) { return S.mapArr[r * nX + c]; }, S.mapLim);
-  drawLand(ctx, R, lon0, lon1, lat0, lat1);
+  drawCells(ctx, R, nX, nY, lonAxis, yEdgePix, function (r, c) { return S.mapArr[r * nX + c]; }, S.mapLim);
+  drawLand(ctx, R, lonE, lon0, lon1, lat0, lat1);
   frame(ctx, R);
   axisStyle(ctx); ctx.textAlign='center'; ctx.textBaseline='top';
-  [-180,-120,-60,0,60,120,180].forEach(function(lv){ if(lv>=Math.min(lon0,lon1)&&lv<=Math.max(lon0,lon1)){ var xx=R.x+((lv-lon0)/(lon1-lon0))*R.w; ctx.beginPath();ctx.moveTo(xx,R.y+R.h);ctx.lineTo(xx,R.y+R.h+3);ctx.stroke(); ctx.fillText(lv, xx, R.y+R.h+5);} });
+  // -180 and 180 are the same meridian, so they only belong at two distinct
+  // pixels when the panel is unrotated (its two edges); once panned they'd
+  // land on the same interior pixel (wherever the seam now sits) and double
+  // up, so drop the -180 label then and let 180 alone mark the seam.
+  [-180,-120,-60,0,60,120,180].forEach(function(lv){ if(lv===-180 && S.lonOffset!==0) return; if(lv>=Math.min(lon0,lon1)&&lv<=Math.max(lon0,lon1)){ var xx=axisValuePix(lonAxis, lonE, lv); ctx.beginPath();ctx.moveTo(xx,R.y+R.h);ctx.lineTo(xx,R.y+R.h+3);ctx.stroke(); ctx.fillText(lv, xx, R.y+R.h+5);} });
   ctx.textAlign='right'; ctx.textBaseline='middle';
   [-60,-30,0,30,60].forEach(function(lv){ if(lv>=Math.min(lat0,lat1)&&lv<=Math.max(lat0,lat1)){ var yy=R.y+(1-(lv-lat0)/(lat1-lat0))*R.h; ctx.beginPath();ctx.moveTo(R.x-3,yy);ctx.lineTo(R.x,yy);ctx.stroke(); ctx.fillText(lv, R.x-6, yy);} });
   drawColorbar(ctx, cssW, R, varLabel(), S.mapLim);
   if (S.mapProfiles) {
-    drawTopProfile(ctx, parts.top, S.mapLonArr, function(i){ return (xEdgePix(i)+xEdgePix(i+1))/2; }, S.mapLonLim);
-    drawSideProfile(ctx, parts.side, S.mapLatArr, function(i){ return (yEdgePix(i)+yEdgePix(i+1))/2; }, S.mapLatLim);
-    drawCornerNotes(ctx, parts.corner, 'selected-latitude mean', 'selected-longitude mean');
+    var rcLL = GVCore.selRowsCols(S.boxLL.set, nX);
+    drawTopProfile(ctx, parts.top, S.mapLonArr, lonAxis, S.mapLonLim, rcLL.cols);
+    drawSideProfile(ctx, parts.side, S.mapLatArr, function(i){ return (yEdgePix(i)+yEdgePix(i+1))/2; }, S.mapLatLim, false, rcLL.rows, yEdgePix, nY);
+    drawPanelLabel(ctx, parts.top.x, parts.top.y, 'mean ' + edgeRunsLabel(rcLL.rows, m.coords.latEdges, fmtLat));
+    drawPanelLabel(ctx, parts.side.x, parts.side.y, 'mean ' + edgeRunsLabel(rcLL.cols, m.coords.lonEdges, fmtLon));
   }
   // selection cells (lat=row, lon=col) that drive the section + anchor marker
-  drawCellSetOutline(ctx, S.boxLL.set, nX, xEdgePix, yEdgePix);
-  drawAnchorCell(ctx, S.boxLL.anchor, nX, xEdgePix, yEdgePix);
-  mapGeom = { R:R, cv:cv, nCols:nX, nRows:nY, lonE:lonE, latE:latE, lon0:lon0, lon1:lon1, lat0:lat0, lat1:lat1 };
+  drawCellSetOutline(ctx, S.boxLL.set, nX, lonAxis, yEdgePix);
+  drawAnchorCell(ctx, S.boxLL.anchor, nX, lonAxis, yEdgePix);
+  mapGeom = { R:R, cv:cv, colAxis: lonAxis, lat0:lat0, lat1:lat1 };
 }
 function varLabel(){ var v=S.model.vars[S.varName]; return v.name + (v.units?' ('+v.units+')':'') + (S.log?' [log]':''); }
 // Draw a label where unit exponents written as "^-2" or "^3" are rendered as
@@ -954,18 +1105,19 @@ function clamp(v,a,b){ return v<a?a:v>b?b:v; }
 function clampi(v,a,b){ v=Math.round(v); return v<a?a:v>b?b:v; }
 function relpos(ev, cv){ var b = cv.getBoundingClientRect(); return { x: ev.clientX - b.left, y: ev.clientY - b.top }; }
 
-// pixel -> [row,col] cell for each panel (row=vertical axis, col=horizontal)
+// pixel -> [row,col] cell for each panel (row=vertical axis, col=horizontal).
+// Columns go through the panel's (possibly panned) colAxis; rows never pan.
 function secPixelToCell(px, py, g){
-  var c = S.model.coords, nM = S.model.sizes.month, nP = S.model.sizes.depth;
-  var col = clampi(Math.floor((px - g.R.x) / g.R.w * nM), 0, nM - 1);
+  var c = S.model.coords, nP = S.model.sizes.depth;
+  var col = axisPixelToDataCol(g.colAxis, px);
   var depthVal = c.depthEdges[0] + (py - g.R.y) / g.R.h * (c.depthEdges[nP] - c.depthEdges[0]);
   return [GVCore.cellIndexForValue(c.depthEdges, depthVal), col];
 }
 function mapPixelToCell(px, py, g){
   var c = S.model.coords;
-  var lonVal = g.lon0 + (px - g.R.x) / g.R.w * (g.lon1 - g.lon0);
+  var lonCol = axisPixelToDataCol(g.colAxis, px);
   var latVal = g.lat0 + (1 - (py - g.R.y) / g.R.h) * (g.lat1 - g.lat0);
-  return [GVCore.cellIndexForValue(c.latEdges, latVal), GVCore.cellIndexForValue(c.lonEdges, lonVal)];
+  return [GVCore.cellIndexForValue(c.latEdges, latVal), lonCol];
 }
 
 // throttle live recompute during a drag to one per animation frame
@@ -984,7 +1136,7 @@ function panelMouseDown(ev, P){
   var box = S[P.boxKey], NC = P.NC(), cell = P.pixelToCell(p.x, p.y, g);
   ev.preventDefault();
   var ctrl = ev.metaKey || ev.ctrlKey;
-  GVCore.selClick(box, cell, NC, ev.shiftKey, ctrl);
+  GVCore.selClick(box, cell, NC, ev.shiftKey, ctrl, g.colAxis.order);
   P.dragging = !ctrl;   // ctrl+click is a one-cell toggle, not a drag
   recomputeAll();
 }
@@ -995,20 +1147,56 @@ function panelMouseMove(ev, P){
   var cell = P.pixelToCell(clamp(p.x, g.R.x, g.R.x + g.R.w), clamp(p.y, g.R.y, g.R.y + g.R.h), g);
   if (cell[0] === box.active[0] && cell[1] === box.active[1]) return;   // still same cell
   box.active = cell.slice();                                            // extend rect from anchor
-  box.set = GVCore.selRectSet(box.anchor, box.active, P.NC());
+  // Screen-order (not raw data-index) span between anchor and active — see
+  // selRectSet's colOrder doc: a drag's "between" is what's between the two
+  // points on screen, which isn't the same thing once the axis is panned.
+  box.set = GVCore.selRectSet(box.anchor, box.active, P.NC(), g.colAxis.order);
   scheduleRecompute();
+}
+
+// Click-and-drag on a panel's bottom axis (the tick-label strip) pans that
+// panel's wrapping column axis (month for the section, longitude for the
+// map), so the panel can be recentred on any arbitrary start column — e.g.
+// the whole Pacific, or Dec-Feb centred in the middle instead of split
+// across the edges. Purely a display transform: it only changes S.monthOffset
+// / S.lonOffset, never the underlying selection or data, so it never touches
+// what gets exported.
+function panelAxisMouseDown(ev, P) {
+  var g = P.getGeom(); if (!g) return;
+  var p = relpos(ev, g.cv), axisTop = g.R.y + g.R.h, axisBottom = axisTop + MARG.b;
+  if (p.x < g.R.x || p.x > g.R.x + g.R.w || p.y < axisTop || p.y > axisBottom) return;
+  ev.preventDefault();
+  P.panDragging = true; P.panStartX = p.x; P.panStartOffset = S[P.offsetKey];
+}
+function panelAxisMouseMove(ev, P) {
+  if (!P.panDragging) return;
+  var g = P.getGeom(); if (!g) return;
+  var p = relpos(ev, g.cv), N = P.NC();
+  var deltaCols = Math.round((p.x - P.panStartX) / (g.R.w / N));
+  var newOffset = wrapMod(P.panStartOffset - deltaCols, N);
+  if (newOffset !== S[P.offsetKey]) { S[P.offsetKey] = newOffset; draw(); }
+}
+// Cursor affordance: ew-resize over the draggable axis strip, crosshair elsewhere.
+function panelAxisHover(ev, P) {
+  if (P.panDragging) return;
+  var g = P.getGeom(); if (!g) return;
+  var p = relpos(ev, g.cv), axisTop = g.R.y + g.R.h, axisBottom = axisTop + MARG.b;
+  var over = p.x >= g.R.x && p.x <= g.R.x + g.R.w && p.y >= axisTop && p.y <= axisBottom;
+  g.cv.style.cursor = over ? 'ew-resize' : 'crosshair';
 }
 
 function initInteraction() {
   var secCv = document.getElementById('secCanvas'), mapCv = document.getElementById('mapCanvas');
-  var secP = { focus:'section', boxKey:'boxTD', getGeom:function(){ return secGeom; }, pixelToCell:secPixelToCell,
-    NC:function(){ return S.model.sizes.month; }, dragging:false };
-  var mapP = { focus:'map', boxKey:'boxLL', getGeom:function(){ return mapGeom; }, pixelToCell:mapPixelToCell,
-    NC:function(){ return S.model.sizes.lon; }, dragging:false };
-  secCv.addEventListener('mousedown', function(e){ panelMouseDown(e, secP); });
-  mapCv.addEventListener('mousedown', function(e){ panelMouseDown(e, mapP); });
-  document.addEventListener('mousemove', function(e){ panelMouseMove(e, secP); panelMouseMove(e, mapP); });
-  document.addEventListener('mouseup', function(){ secP.dragging = false; mapP.dragging = false; });
+  var secP = { focus:'section', boxKey:'boxTD', offsetKey:'monthOffset', getGeom:function(){ return secGeom; }, pixelToCell:secPixelToCell,
+    NC:function(){ return S.model.sizes.month; }, dragging:false, panDragging:false };
+  var mapP = { focus:'map', boxKey:'boxLL', offsetKey:'lonOffset', getGeom:function(){ return mapGeom; }, pixelToCell:mapPixelToCell,
+    NC:function(){ return S.model.sizes.lon; }, dragging:false, panDragging:false };
+  secCv.addEventListener('mousedown', function(e){ panelAxisMouseDown(e, secP); panelMouseDown(e, secP); });
+  mapCv.addEventListener('mousedown', function(e){ panelAxisMouseDown(e, mapP); panelMouseDown(e, mapP); });
+  secCv.addEventListener('mousemove', function(e){ panelAxisHover(e, secP); });
+  mapCv.addEventListener('mousemove', function(e){ panelAxisHover(e, mapP); });
+  document.addEventListener('mousemove', function(e){ panelMouseMove(e, secP); panelMouseMove(e, mapP); panelAxisMouseMove(e, secP); panelAxisMouseMove(e, mapP); });
+  document.addEventListener('mouseup', function(){ secP.dragging = false; mapP.dragging = false; secP.panDragging = false; mapP.panDragging = false; });
   // clicking anywhere in a panel (title, padding) switches focus without editing
   secCv.parentElement.addEventListener('mousedown', function(){ setFocus('section'); });
   mapCv.parentElement.addEventListener('mousedown', function(){ setFocus('map'); });

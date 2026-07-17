@@ -330,11 +330,34 @@
   // active cell. Cells can be an arbitrary set (rectangles, wrapped columns, or
   // discontiguous via ctrl-click). Rows never wrap; columns wrap for the
   // panels that want it (month / lon).
-  function selRectSet(anchor, active, NC) {
+  //
+  // `colOrder`, if given, is the data-column index shown at each screen
+  // position left-to-right (i.e. a panned axis's display order — see
+  // buildRotatedAxis in index.html). Anchor/active columns are always plain
+  // data indices; without colOrder the "rectangle between them" is the plain
+  // data-index range (the historical behaviour, still right for keyboard
+  // moves, which are defined in data space). But a mouse drag is defined by
+  // where the user dragged *on screen*, so once a panel is panned, "between"
+  // has to mean between their screen positions, not their data indices —
+  // otherwise a drag across a short, wrapped, visually-contiguous span (e.g.
+  // Nov-Feb once panned to centre on Jan/Feb) reads as the data-index gap
+  // between them instead, which is the long way round through the other ten
+  // months.
+  function selRectSet(anchor, active, NC, colOrder) {
     var r0 = Math.min(anchor[0], active[0]), r1 = Math.max(anchor[0], active[0]);
-    var c0 = Math.min(anchor[1], active[1]), c1 = Math.max(anchor[1], active[1]);
+    var cols;
+    if (colOrder) {
+      var slotOf = {};
+      for (var i = 0; i < colOrder.length; i++) slotOf[colOrder[i]] = i;
+      var s0 = Math.min(slotOf[anchor[1]], slotOf[active[1]]);
+      var s1 = Math.max(slotOf[anchor[1]], slotOf[active[1]]);
+      cols = colOrder.slice(s0, s1 + 1);
+    } else {
+      var c0 = Math.min(anchor[1], active[1]), c1 = Math.max(anchor[1], active[1]);
+      cols = []; for (var c = c0; c <= c1; c++) cols.push(c);
+    }
     var set = {};
-    for (var r = r0; r <= r1; r++) for (var c = c0; c <= c1; c++) set[r * NC + c] = 1;
+    for (var r = r0; r <= r1; r++) for (var ci = 0; ci < cols.length; ci++) set[r * NC + cols[ci]] = 1;
     return set;
   }
   function selCells(set, NC) {
@@ -365,18 +388,19 @@
   // Apply a mouse click at `cell` [r,c] to a selection box {set,anchor,active},
   // Excel-style: ctrl/cmd toggles one cell (discontiguous); shift extends the
   // rectangle from the anchor; plain click starts a new single-cell box.
+  // `colOrder` is the optional screen-order column mapping (see selRectSet).
   // Mutates box in place.
-  function selClick(box, cell, NC, shiftKey, ctrlKey) {
+  function selClick(box, cell, NC, shiftKey, ctrlKey, colOrder) {
     if (ctrlKey) {
       var key = cell[0] * NC + cell[1];
       if (box.set[key]) delete box.set[key]; else box.set[key] = 1;
       box.anchor = cell.slice(); box.active = cell.slice();
     } else if (shiftKey) {
       box.active = cell.slice();
-      box.set = selRectSet(box.anchor, box.active, NC);
+      box.set = selRectSet(box.anchor, box.active, NC, colOrder);
     } else {
       box.anchor = cell.slice(); box.active = cell.slice();
-      box.set = selRectSet(cell, cell, NC);
+      box.set = selRectSet(cell, cell, NC, colOrder);
     }
   }
 
