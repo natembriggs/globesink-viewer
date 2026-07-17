@@ -1144,6 +1144,9 @@ function drawDepthLat(sharedH) {
   frame(ctx, R);
   axisStyle(ctx); ctx.textAlign = 'center'; ctx.textBaseline = 'top';
   [-60, -30, 0, 30, 60].forEach(function (lv) { if (lv >= Math.min(lat0, lat1) && lv <= Math.max(lat0, lat1)) { var xx = R.x + ((lv - lat0) / (lat1 - lat0)) * R.w; ctx.beginPath(); ctx.moveTo(xx, R.y + R.h); ctx.lineTo(xx, R.y + R.h + 3); ctx.stroke(); ctx.fillText(lv, xx, R.y + R.h + 5); } });
+  // Unlike the map, this panel has no coastline to make "these numbers are
+  // latitude" obvious, so it needs an explicit axis label.
+  ctx.fillText('latitude', R.x + R.w / 2, R.y + R.h + 18);
   ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
   var dticks = [0, 200, 400, 600, 800, 1000, 1200, 1400, 1600, 1800, 2000];
   dticks.forEach(function (dv) { if (dv >= dTop && dv <= dBot) { var yy = R.y + ((dv - dTop) / (dBot - dTop)) * R.h; ctx.beginPath(); ctx.moveTo(R.x - 3, yy); ctx.lineTo(R.x, yy); ctx.stroke(); ctx.fillText(dv, R.x - 6, yy); } });
@@ -1172,6 +1175,9 @@ function drawLatMonth(sharedH) {
   for (var mi = 0; mi < nM; mi++) ctx.fillText(MONTHS[mi], (monthAxis.leftPix(mi) + monthAxis.rightPix(mi)) / 2, R.y + R.h + 5);
   ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
   [-60, -30, 0, 30, 60].forEach(function (lv) { if (lv >= Math.min(lat0, lat1) && lv <= Math.max(lat0, lat1)) { var yy = R.y + (1 - (lv - lat0) / (lat1 - lat0)) * R.h; ctx.beginPath(); ctx.moveTo(R.x - 3, yy); ctx.lineTo(R.x, yy); ctx.stroke(); ctx.fillText(lv, R.x - 6, yy); } });
+  // Unlike the map, this panel has no coastline to make "these numbers are
+  // latitude" obvious, so it needs an explicit axis label.
+  ctx.save(); ctx.translate(14, R.y + R.h / 2); ctx.rotate(-Math.PI / 2); ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText('latitude', 0, 0); ctx.restore();
   drawColorbar(ctx, cssW, R, varLabel(), S.latMonthLim);
   latMonthGeom = { R: R, cv: cv };
 }
