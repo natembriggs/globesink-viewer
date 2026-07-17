@@ -220,3 +220,8 @@ look before considering this feature fully done.
 ## License
 
 MIT (a suggested default — change it if you prefer). See `LICENSE`.
+
+---
+
+Maintained by Nathan Briggs, National Oceanography Centre, UK,
+natbrig@noc.ac.uk. Feedback and feature requests welcome.
