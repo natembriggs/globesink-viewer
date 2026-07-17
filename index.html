@@ -30,7 +30,6 @@
   canvas { width:100%; height:auto; display:block; touch-action:none; cursor:crosshair; }
   #status { padding:6px 14px; border-top:1px solid var(--line); color:var(--muted); font-size:12px; min-height:26px; }
   .hint { color:var(--muted); font-size:11px; }
-  #varSel { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
   #varDesc { max-width:320px; }
   a { color:var(--accent); }
   .dlrow { text-align:center; margin-top:2px; }
@@ -208,19 +207,9 @@ function loadModelFromBuffer(ab, name, source) {
     var orderedNames = core.concat(rest);
     var vs = document.getElementById('varSel');
     vs.innerHTML = '';
-    // "name (units)" label, padded (in the dropdown's monospace font) so every
-    // option's description lines up in one column just right of the longest
-    // label, regardless of which optgroup it's in.
-    var nameUnitLabel = function (n) { return n + (model.vars[n].units ? '  (' + model.vars[n].units + ')' : ''); };
-    var maxLabelLen = 0;
-    model.varNames.forEach(function (n) { maxLabelLen = Math.max(maxLabelLen, nameUnitLabel(n).length); });
-    var padRight = function (s, len) { while (s.length < len) s += ' '; return s; };
     var addOpt = function (parent, n) {
       var o = document.createElement('option'); o.value = n;
-      var label = nameUnitLabel(n), desc = model.vars[n].long_name;
-      // parseNetCDF falls back to the variable's own key when long_name is
-      // absent — skip appending it then, since that's not a description.
-      o.textContent = (desc && desc !== n) ? padRight(label, maxLabelLen + 3) + capitalize(desc) : label;
+      o.textContent = n + (model.vars[n].units ? '  (' + model.vars[n].units + ')' : '');
       parent.appendChild(o);
     };
     if (core.length && rest.length) {   // fuller file: label the two groups
