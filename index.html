@@ -1261,6 +1261,53 @@ function commitLatMonthBox(box) {
   S.lmAnchor = box.anchor.slice(); S.lmActive = box.active.slice();
 }
 
+// ---------- extra-panel anchor cells ----------
+// Each extra panel keeps a persistent, always-drawn anchor (the origin a
+// shift-click / shift-arrow extends from). Because its selection is derived
+// from the two main boxes, an edit on another panel can move the selection out
+// from under its anchor; syncAnchors then picks a new one. Layout of each
+// extra panel as [rowDim, colDim] over the four data dimensions:
+var EXTRA_PANELS = {
+  depthLat: { rowDim: 'depth', colDim: 'lat', anchorKey: 'dlAnchor' },
+  latMonth: { rowDim: 'lat', colDim: 'month', anchorKey: 'lmAnchor' }
+};
+// Current selected index list along each of the four dimensions.
+function selDimSets() {
+  var ll = GVCore.selRowsCols(S.boxLL.set, S.model.sizes.lon), td = GVCore.selRowsCols(S.boxTD.set, S.model.sizes.month);
+  return { lat: ll.rows, lon: ll.cols, depth: td.rows, month: td.cols };
+}
+// The active panel's anchor expressed as {dimension: index} for its two dims.
+function panelAnchorDims(panel) {
+  if (panel === 'section') return { depth: S.boxTD.anchor[0], month: S.boxTD.anchor[1] };
+  if (panel === 'map') return { lat: S.boxLL.anchor[0], lon: S.boxLL.anchor[1] };
+  if (panel === 'depthLat') return S.dlAnchor ? { depth: S.dlAnchor[0], lat: S.dlAnchor[1] } : null;
+  if (panel === 'latMonth') return S.lmAnchor ? { lat: S.lmAnchor[0], month: S.lmAnchor[1] } : null;
+  return null;
+}
+// Reconcile the extra panels' anchors after `activePanel` was edited. An anchor
+// still inside its panel's selection is kept. Otherwise it is re-chosen:
+//   - along the dimension shared with the active panel -> that panel's anchor
+//     index (so the anchor lines up with where the user just acted);
+//   - along the other (non-shared) dimension -> its previous index if that is
+//     still selected, else the first selected index (top-left default).
+function syncAnchors(activePanel) {
+  if (!S.model || !S.extraPanels) return;
+  var d = selDimSets(), activeDims = activePanel ? panelAnchorDims(activePanel) : null;
+  Object.keys(EXTRA_PANELS).forEach(function (name) {
+    if (name === activePanel) return;   // its anchor was just set by its own edit
+    var cfg = EXTRA_PANELS[name], rowSet = d[cfg.rowDim], colSet = d[cfg.colDim];
+    if (!rowSet.length || !colSet.length) return;
+    var cur = S[cfg.anchorKey];
+    var rowOK = !!cur && rowSet.indexOf(cur[0]) >= 0, colOK = !!cur && colSet.indexOf(cur[1]) >= 0;
+    if (cur && rowOK && colOK) return;  // still valid — keep it
+    var pick = function (dim, oldVal, oldOK, set) {
+      if (activeDims && activeDims[dim] != null && set.indexOf(activeDims[dim]) >= 0) return activeDims[dim];
+      return oldOK ? oldVal : set[0];
+    };
+    S[cfg.anchorKey] = [pick(cfg.rowDim, cur && cur[0], rowOK, rowSet), pick(cfg.colDim, cur && cur[1], colOK, colSet)];
+  });
+}
+
 // ----- extra panel (bottom-left): x=lat, y=depth. Selectable; the selection
 // lives in the two main boxes (lat in boxLL, depth in boxTD). -----
 var depthLatGeom = null;
@@ -1297,7 +1344,9 @@ function drawDepthLat(sharedH) {
   var depthSel = GVCore.selRowsCols(S.boxTD.set, m.sizes.month).rows;
   var selSet = productSet(depthSel, latSel, nY);
   drawCellSetOutline(ctx, selSet, nY, latAxis, yEdgePix);
-  if (S.dlAnchor && selSet[S.dlAnchor[0] * nY + S.dlAnchor[1]]) drawAnchorCell(ctx, S.dlAnchor, nY, latAxis, yEdgePix);
+  // always keep an anchor set + drawn (default: top-left cell of the selection)
+  if (!S.dlAnchor || !selSet[S.dlAnchor[0] * nY + S.dlAnchor[1]]) S.dlAnchor = [depthSel[0], latSel[0]];
+  drawAnchorCell(ctx, S.dlAnchor, nY, latAxis, yEdgePix);
   depthLatGeom = { R: R, cv: cv, colAxis: latAxis, lat0: lat0, lat1: lat1 };
 }
 
@@ -1332,7 +1381,9 @@ function drawLatMonth(sharedH) {
   var monthSel = GVCore.selRowsCols(S.boxTD.set, nM).cols;
   var selSet = productSet(latSel, monthSel, nM);
   drawCellSetOutline(ctx, selSet, nM, monthAxis, yEdgePix);
-  if (S.lmAnchor && selSet[S.lmAnchor[0] * nM + S.lmAnchor[1]]) drawAnchorCell(ctx, S.lmAnchor, nM, monthAxis, yEdgePix);
+  // always keep an anchor set + drawn (default: top-left cell of the selection)
+  if (!S.lmAnchor || !selSet[S.lmAnchor[0] * nM + S.lmAnchor[1]]) S.lmAnchor = [latSel[0], monthSel[0]];
+  drawAnchorCell(ctx, S.lmAnchor, nM, monthAxis, yEdgePix);
   latMonthGeom = { R: R, cv: cv, colAxis: monthAxis, lat0: lat0, lat1: lat1 };
 }
 
@@ -1461,6 +1512,7 @@ function panelMouseDown(ev, P){
   var ctrl = ev.metaKey || ev.ctrlKey;
   GVCore.selClick(box, cell, NC, ev.shiftKey, ctrl, g.colAxis.order);
   P.commit(box);
+  syncAnchors(P.focus);
   P.dragging = !ctrl;   // ctrl+click is a one-cell toggle, not a drag
   recomputeAll();
 }
@@ -1476,6 +1528,7 @@ function panelMouseMove(ev, P){
   // points on screen, which isn't the same thing once the axis is panned.
   box.set = GVCore.selRectSet(box.anchor, box.active, NC, g.colAxis.order);
   P.commit(box);
+  syncAnchors(P.focus);
   scheduleRecompute();
 }
 
@@ -1526,9 +1579,9 @@ function initInteraction() {
   // pannable and shares S.monthOffset with the section panel (so they stay
   // linked); depthLat has no pannable axis.
   var depthLatCv = document.getElementById('depthLatCanvas'), latMonthCv = document.getElementById('latMonthCanvas');
-  var depthLatP = { getGeom:function(){ return depthLatGeom; }, pixelToCell:depthLatPixelToCell,
+  var depthLatP = { focus:'depthLat', getGeom:function(){ return depthLatGeom; }, pixelToCell:depthLatPixelToCell,
     NC:function(){ return S.model.sizes.lat; }, getBox:depthLatBox, commit:commitDepthLatBox, dragging:false };
-  var latMonthP = { offsetKey:'monthOffset', getGeom:function(){ return latMonthGeom; }, pixelToCell:latMonthPixelToCell,
+  var latMonthP = { focus:'latMonth', offsetKey:'monthOffset', getGeom:function(){ return latMonthGeom; }, pixelToCell:latMonthPixelToCell,
     NC:function(){ return S.model.sizes.month; }, getBox:latMonthBox, commit:commitLatMonthBox, dragging:false, panDragging:false };
   secCv.addEventListener('mousedown', function(e){ panelAxisMouseDown(e, secP); panelMouseDown(e, secP); });
   mapCv.addEventListener('mousedown', function(e){ panelAxisMouseDown(e, mapP); panelMouseDown(e, mapP); });
@@ -1546,36 +1599,55 @@ function initInteraction() {
   // clicking anywhere in a panel (title, padding) switches focus without editing
   secCv.parentElement.addEventListener('mousedown', function(){ setFocus('section'); });
   mapCv.parentElement.addEventListener('mousedown', function(){ setFocus('map'); });
+  depthLatCv.parentElement.addEventListener('mousedown', function(){ setFocus('depthLat'); });
+  latMonthCv.parentElement.addEventListener('mousedown', function(){ setFocus('latMonth'); });
 }
 
+var FOCUS_CANVAS = { section:'secCanvas', map:'mapCanvas', depthLat:'depthLatCanvas', latMonth:'latMonthCanvas' };
 function setFocus(which) {
   // pull keyboard focus out of any text field so arrow keys drive the plot
   var ae = document.activeElement;
   if (ae && ae.blur && (ae.tagName === 'INPUT' || ae.tagName === 'SELECT' || ae.tagName === 'TEXTAREA')) ae.blur();
   S.focus = which;
-  document.getElementById('secCanvas').parentElement.classList.toggle('focused', which === 'section');
-  document.getElementById('mapCanvas').parentElement.classList.toggle('focused', which === 'map');
+  Object.keys(FOCUS_CANVAS).forEach(function (k) {
+    document.getElementById(FOCUS_CANVAS[k]).parentElement.classList.toggle('focused', which === k);
+  });
 }
 
+// Keyboard config per focusable panel: how to fetch/commit its box, its
+// row/col sizes, whether its column axis wraps (month/lon do, lat doesn't),
+// and which row delta ArrowUp means (panels with depth on the y-axis go
+// shallower = -1; panels with latitude go north = +1). The extra panels reuse
+// the same getBox/commit as their mouse interaction.
+function keyboardPanelCfg(focus) {
+  var s = S.model.sizes;
+  if (focus === 'section') return { getBox:function(){ return S.boxTD; }, commit:_noop, NR:s.depth, NC:s.month, wrapCol:true, upDr:-1 };
+  if (focus === 'map') return { getBox:function(){ return S.boxLL; }, commit:_noop, NR:s.lat, NC:s.lon, wrapCol:true, upDr:1 };
+  if (focus === 'depthLat') return { getBox:depthLatBox, commit:commitDepthLatBox, NR:s.depth, NC:s.lat, wrapCol:false, upDr:-1 };
+  if (focus === 'latMonth') return { getBox:latMonthBox, commit:commitLatMonthBox, NR:s.lat, NC:s.month, wrapCol:true, upDr:1 };
+  return null;
+}
 // Arrow keys drive the focused plot's selection:
-//   plain arrow  → move the whole box one cell (columns wrap, rows clamp)
+//   plain arrow  → move the whole box one cell (wrapping columns wrap, else clamp)
 //   shift+arrow  → grow/shrink the box from its anchor (Excel-style)
 document.addEventListener('keydown', function (e) {
   if (!S.model || !S.focus) return;
   if (e.key.indexOf('Arrow') !== 0) return;
   var ae = document.activeElement;
   if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'SELECT')) return; // don't hijack form fields
+  var cfg = keyboardPanelCfg(S.focus);
+  if (!cfg) return;
+  if ((S.focus === 'depthLat' || S.focus === 'latMonth') && !S.extraPanels) return; // panel not visible
   e.preventDefault();
-  var isSec = S.focus === 'section';
-  var box = isSec ? S.boxTD : S.boxLL;
-  var NR = isSec ? S.model.sizes.depth : S.model.sizes.lat;
-  var NC = isSec ? S.model.sizes.month : S.model.sizes.lon;
   var dr = 0, dc = 0;
   if (e.key === 'ArrowLeft') dc = -1;
   else if (e.key === 'ArrowRight') dc = 1;
-  else if (e.key === 'ArrowUp') dr = isSec ? -1 : 1;    // section up = shallower; map up = north
-  else if (e.key === 'ArrowDown') dr = isSec ? 1 : -1;
-  GVCore.selArrow(box, dr, dc, NR, NC, e.shiftKey);     // shift → resize; plain → move (cols wrap)
+  else if (e.key === 'ArrowUp') dr = cfg.upDr;
+  else if (e.key === 'ArrowDown') dr = -cfg.upDr;
+  var box = cfg.getBox();
+  GVCore.selArrow(box, dr, dc, cfg.NR, cfg.NC, e.shiftKey, cfg.wrapCol);   // shift → resize; plain → move
+  cfg.commit(box);
+  syncAnchors(S.focus);
   recomputeAll();
 });
 
@@ -1653,6 +1725,8 @@ document.getElementById('mapProfiles').onchange = function(e){ S.mapProfiles = e
 document.getElementById('extraPanels').onchange = function(e){
   S.extraPanels = e.target.checked;
   document.getElementById('plots2').style.display = S.extraPanels ? 'flex' : 'none';
+  // don't leave keyboard focus on a now-hidden extra panel
+  if (!S.extraPanels && (S.focus === 'depthLat' || S.focus === 'latMonth')) setFocus(null);
   recomputeAll();
 };
 function segSet(id,btn){ document.querySelectorAll('#'+id+' button').forEach(function(b){b.classList.remove('on');}); btn.classList.add('on'); }

@@ -80,7 +80,7 @@ try {
   var m = html.match(/<script>([\s\S]*?)<\/script>\s*<\/body>/);
   if (!m) throw new Error('could not extract inline script');
   // strict-mode eval keeps declarations local, so expose what we need to assert on
-  eval(m[1] + '\n;globalThis.__gv = { S: S, recomputeAll: recomputeAll, recomputeKeep: recomputeKeep, loadModelFromBuffer: loadModelFromBuffer, loadPublished: loadPublished, panelRects: panelRects, landLoaded: function(){ return LAND != null; }, land: function(){ return LAND; }, csvSectionGrid: csvSectionGrid, csvMapLong: csvMapLong, jsonExport: jsonExport, draw: draw, buildRotatedAxis: buildRotatedAxis, axisPixelToDataCol: axisPixelToDataCol, wrapMod: wrapMod, secGeom: function(){ return secGeom; }, latMonthGeom: function(){ return latMonthGeom; }, depthLatGeom: function(){ return depthLatGeom; }, depthLatBox: depthLatBox, commitDepthLatBox: commitDepthLatBox, latMonthBox: latMonthBox, commitLatMonthBox: commitLatMonthBox, productSet: productSet, bboxRange: bboxRange };');
+  eval(m[1] + '\n;globalThis.__gv = { S: S, recomputeAll: recomputeAll, recomputeKeep: recomputeKeep, loadModelFromBuffer: loadModelFromBuffer, loadPublished: loadPublished, panelRects: panelRects, landLoaded: function(){ return LAND != null; }, land: function(){ return LAND; }, csvSectionGrid: csvSectionGrid, csvMapLong: csvMapLong, jsonExport: jsonExport, draw: draw, buildRotatedAxis: buildRotatedAxis, axisPixelToDataCol: axisPixelToDataCol, wrapMod: wrapMod, secGeom: function(){ return secGeom; }, latMonthGeom: function(){ return latMonthGeom; }, depthLatGeom: function(){ return depthLatGeom; }, depthLatBox: depthLatBox, commitDepthLatBox: commitDepthLatBox, latMonthBox: latMonthBox, commitLatMonthBox: commitLatMonthBox, productSet: productSet, bboxRange: bboxRange, syncAnchors: syncAnchors };');
   var G = globalThis.__gv, S = G.S;
   var recomputeAll = G.recomputeAll, recomputeKeep = G.recomputeKeep;
   // the app now starts blank; drive the file-load path directly
@@ -186,6 +186,44 @@ try {
     S.boxLL = { anchor:[0,0], active:[nY-1,nX-1], set: GVCore.selRectSet([0,0],[nY-1,nX-1], nX) };
     S.boxTD = { anchor:[0,0], active:[0,nM-1], set: GVCore.selRectSet([0,0],[0,nM-1], nM) };
     recomputeAll(); G.draw();   // exercise the selection-drawing paths on both extra panels
+  })();
+
+  // ---- extra-panel anchor cells: always set, and re-chosen sensibly when a
+  // selection on another panel moves the selection out from under them ----
+  (function () {
+    var nY = S.model.sizes.lat, nX = S.model.sizes.lon, nM = S.model.sizes.month;
+    // clean full-globe start, no anchors yet
+    S.boxLL = { anchor:[0,0], active:[nY-1,nX-1], set: GVCore.selRectSet([0,0],[nY-1,nX-1], nX) };
+    S.boxTD = { anchor:[0,0], active:[0,nM-1], set: GVCore.selRectSet([0,0],[0,nM-1], nM) };
+    S.dlAnchor = S.dlActive = S.lmAnchor = S.lmActive = null;
+    G.draw();   // draw defaults each extra anchor to the top-left cell of its selection
+    chk('depthLat anchor defaults to top-left of selection', S.dlAnchor && S.dlAnchor[0] === GVCore.selRowsCols(S.boxTD.set, nM).rows[0] && S.dlAnchor[1] === 0);
+    chk('latMonth anchor defaults to top-left of selection', S.lmAnchor && S.lmAnchor[0] === 0 && S.lmAnchor[1] === 0);
+
+    // Put depthLat's anchor at a specific depth/lat, then edit the MAP (shared
+    // dim = lat) with an anchor at lat 30 that drops depthLat's lat (10) from
+    // the selection. The new anchor should take lat from the map's anchor and
+    // keep depthLat's old depth.
+    S.boxTD = { anchor:[0,0], active:[8,nM-1], set: GVCore.selRectSet([0,0],[8,nM-1], nM) };  // depth 0..8 so depth 5 is valid
+    S.dlAnchor = [5, 10];   // depth 5, lat 10
+    S.boxLL = { anchor:[30, 0], active:[40, nX-1], set: GVCore.selRectSet([30,0],[40,nX-1], nX) };  // lat 30..40
+    G.syncAnchors('map');
+    chk('anchor shared dim (lat) follows the active panel anchor', S.dlAnchor[1] === 30);
+    chk('anchor non-shared dim (depth) is kept when still valid', S.dlAnchor[0] === 5);
+
+    // Edit the SECTION (shared dim = depth) with anchor depth 2, dropping the
+    // current depth 5 from the selection; depthLat lat (30) is untouched and
+    // must be preserved.
+    S.boxTD = { anchor:[2, 0], active:[3, nM-1], set: GVCore.selRectSet([2,0],[3,nM-1], nM) };  // depth 2..3
+    G.syncAnchors('section');
+    chk('anchor re-chosen: depth follows section anchor', S.dlAnchor[0] === 2);
+    chk('anchor re-chosen: lat preserved from before', S.dlAnchor[1] === 30);
+
+    // A valid anchor is left alone: shrink lat to still include 30 -> keep.
+    S.dlAnchor = [2, 30];
+    S.boxLL = { anchor:[25,0], active:[35,nX-1], set: GVCore.selRectSet([25,0],[35,nX-1], nX) };  // lat 25..35 (still has 30)
+    G.syncAnchors('map');
+    chk('valid anchor is preserved across an edit', S.dlAnchor[0] === 2 && S.dlAnchor[1] === 30);
   })();
 
   S.extraPanels = false; recomputeAll();

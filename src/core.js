@@ -406,13 +406,16 @@
   }
 
   // Apply an arrow key. shift → grow/shrink from the anchor (clamped both axes);
-  // plain → move the whole selection (columns wrap, rows clamp). Mutates box.
-  function selArrow(box, dr, dc, NR, NC, shiftKey) {
+  // plain → move the whole selection (rows clamp; columns wrap when wrapCol,
+  // else clamp — latitude columns on the extra panels don't wrap). Mutates box.
+  // wrapCol defaults to true (month/longitude columns on the main panels).
+  function selArrow(box, dr, dc, NR, NC, shiftKey, wrapCol) {
+    if (wrapCol === undefined) wrapCol = true;
     if (shiftKey) {
       box.active = [clampI(box.active[0] + dr, 0, NR - 1), clampI(box.active[1] + dc, 0, NC - 1)];
       box.set = selRectSet(box.anchor, box.active, NC);
     } else {
-      var mv = selMove(box.set, box.anchor, box.active, dr, dc, NR, NC, true);
+      var mv = selMove(box.set, box.anchor, box.active, dr, dc, NR, NC, wrapCol);
       box.set = mv.set; box.anchor = mv.anchor; box.active = mv.active;
     }
   }

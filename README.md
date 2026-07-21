@@ -44,9 +44,16 @@ selection stays on each panel as a thin magenta rectangle.
   four panels stay in sync. Because there is nowhere to store a correlation
   *between* the two main boxes, a dimension not shown on the panel being edited
   jumps to its bounding box — so selecting there overrides any earlier
-  ctrl-selection along that unseen dimension. The month × latitude panel's
-  month axis is pannable, same as the section panel's, and the two are linked —
-  dragging either one pans both together.
+  ctrl-selection along that unseen dimension (ctrl-select therefore behaves a
+  little differently on the extra panels; everything else — click, drag,
+  shift-click, arrow keys and shift+arrows — matches the main panels). Each
+  extra panel keeps a persistent, always-drawn **anchor cell** (the origin a
+  shift-click or shift+arrow extends from); when an edit on another panel moves
+  the selection out from under it, the anchor is re-chosen — lining up with the
+  active panel's anchor along their shared axis and keeping its previous
+  position along the other. The month × latitude panel's month axis is pannable,
+  same as the section panel's, and the two are linked — dragging either one pans
+  both together.
 - **Log / linear** colour scale.
 - **Missing-value policy:** *ignore in mean* (nan-mean) or *missing if any*
   (the average is blank if any contributing cell is missing).
@@ -66,10 +73,10 @@ selection stays on each panel as a thin magenta rectangle.
   cells, updating the other panel live); **shift+click** extends the box from
   its anchor; **⌘/Ctrl+click** adds or removes an individual cell (discontiguous
   selections are allowed). The anchor cell is marked with a dashed outline.
-- **Keyboard:** click a plot to focus it (magenta border), then arrow keys move
-  the whole box one cell (left/right wrap — month on the section, longitude on
-  the map; up/down clamp), and **shift+arrows** grow or shrink it from the
-  anchor.
+- **Keyboard:** click any plot (including the extra panels) to focus it (magenta
+  border), then arrow keys move the whole box one cell (left/right wrap where the
+  axis is cyclic — month and longitude — and clamp where it isn't — latitude and
+  depth), and **shift+arrows** grow or shrink it from the anchor.
 - **Export** the data behind either panel — CSV grid, CSV long/tidy, or JSON —
   with source NetCDF metadata, variable attributes, exact selected cell pairs,
   weighting formula, missing-value policy, conditions, coordinates, and units
@@ -181,7 +188,7 @@ collapses (including the discontiguous-selection union rule), the extra-panel
 conditions — against `numpy` values or hand-derived cases — and (2) runs the
 full `index.html` wiring (including all four marginal profiles, both extra
 panels, both weighting modes, and linked/unlinked scales) against a stubbed
-DOM/Canvas to catch runtime errors. Currently 69 core checks + 84 wiring
+DOM/Canvas to catch runtime errors. Currently 69 core checks + 91 wiring
 checks, all passing. Rendering itself (pixels, drag interactions, visual
 alignment of the marginal/extra panels) can only be verified in a real browser.
 
