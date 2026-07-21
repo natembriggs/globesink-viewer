@@ -81,7 +81,10 @@ selection stays on each panel as a thin magenta rectangle.
   companions and a marginal panel is on) controls whether the — sometimes very
   wide — precision bound lines are allowed to stretch the auto range; turn it
   off to scale to the data and let those bounds run off-panel. Systematic bounds
-  are always included.
+  are always included. Wherever a bound line runs past a panel's value range, the
+  clipped line is annotated with small arrowheads on the exceeded edge, pointing
+  outward, so an off-scale bound reads as "continues off scale" rather than
+  simply vanishing.
 - **Excel-like cell selection:** click or drag to select (snapping to whole
   cells, updating the other panel live); **shift+click** extends the box from
   its anchor; **⌘/Ctrl+click** adds or removes an individual cell (discontiguous

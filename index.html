@@ -1017,14 +1017,53 @@ function topProfilePoints(values, axis) {
   xs.push(axis.ghostRightPix()); ys.push(values[axis.order[0]]);
   return { xs: xs, ys: ys };
 }
+// A small filled arrowhead marking that a bound line has run off the panel's
+// value axis at this position, drawn on the exceeded edge and pointing outward.
+// `dir` is the outward direction; tip sits on the edge, base just inside.
+function drawOffScaleMarker(ctx, tipX, tipY, dir, color) {
+  var s = 3.5;
+  ctx.save(); ctx.setLineDash([]); ctx.fillStyle = color; ctx.beginPath();
+  if (dir === 'up')         { ctx.moveTo(tipX, tipY);     ctx.lineTo(tipX - s, tipY + s); ctx.lineTo(tipX + s, tipY + s); }
+  else if (dir === 'down')  { ctx.moveTo(tipX, tipY);     ctx.lineTo(tipX - s, tipY - s); ctx.lineTo(tipX + s, tipY - s); }
+  else if (dir === 'left')  { ctx.moveTo(tipX, tipY);     ctx.lineTo(tipX + s, tipY - s); ctx.lineTo(tipX + s, tipY + s); }
+  else /* right */          { ctx.moveTo(tipX, tipY);     ctx.lineTo(tipX - s, tipY - s); ctx.lineTo(tipX - s, tipY + s); }
+  ctx.closePath(); ctx.fill(); ctx.restore();
+}
+// Mark, along a marginal panel's value edge, every bin where a bound line
+// exceeds the panel's value range (t>1 off the high edge, t<0 off the low one)
+// so a clipped line reads as "continues off scale" rather than as vanishing.
+// The check is purely geometric, so markers appear exactly when a bound is out
+// of range — e.g. precision bounds once "fit precision" is turned off.
+function markOffScaleTop(ctx, R, arr, axis, lim) {
+  var N = axis.order.length, color = profileUncColor(0.25);
+  for (var slot = 0; slot < N; slot++) {
+    var dc = axis.order[slot], t = norm(arr[dc], lim[0], lim[1]);
+    if (isNaN(t)) continue;
+    var cx = (axis.leftPix(dc) + axis.rightPix(dc)) / 2;
+    if (t > 1) drawOffScaleMarker(ctx, cx, R.y, 'up', color);
+    else if (t < 0) drawOffScaleMarker(ctx, cx, R.y + R.h, 'down', color);
+  }
+}
+function markOffScaleSide(ctx, R, arr, yCenter, lim) {
+  var color = profileUncColor(0.25);
+  for (var i = 0; i < arr.length; i++) {
+    var t = norm(arr[i], lim[0], lim[1]);
+    if (isNaN(t)) continue;
+    var cy = yCenter(i);
+    if (t > 1) drawOffScaleMarker(ctx, R.x + R.w, cy, 'right', color);
+    else if (t < 0) drawOffScaleMarker(ctx, R.x, cy, 'left', color);
+  }
+}
 // Draw whichever of the precision/systematic-uncertainty companion lines are
-// present (see companionUncVars) behind the main line, in its own colour.
+// present (see companionUncVars) behind the main line, in its own colour, plus
+// off-scale arrowheads where a bound runs past the panel's value range.
 // `uncArrays` is {suffix: Float32Array}, already the same shape as `values`.
-function drawUncertaintyOverlaysTop(ctx, R, uncArrays, axis, yPix) {
+function drawUncertaintyOverlaysTop(ctx, R, uncArrays, axis, yPix, lim) {
   UNC_SUFFIXES.forEach(function (suf) {
     var arr = uncArrays[suf]; if (!arr) return;
     var pts = topProfilePoints(arr, axis), st = UNC_SPEC[suf];
     drawProfilePathXYStyled(ctx, R, pts.xs, pts.ys, yPix, { color: profileUncColor(0.5), width: st.width, dash: st.dash });
+    markOffScaleTop(ctx, R, arr, axis, lim);
   });
 }
 // Top marginal panels (month / longitude) plot every data column of the axis
@@ -1038,7 +1077,7 @@ function drawTopProfile(ctx, R, values, axis, lim, selIdx, uncArrays) {
   if (selIdx) drawTopSelBox(ctx, R, selIdx, axis);
   var yPix = function(v){ var t = norm(v, lim[0], lim[1]); return isNaN(t) ? NaN : R.y + (1 - t) * R.h; };
   // Uncertainty overlays first, so the main line sits on top of them.
-  if (uncArrays) drawUncertaintyOverlaysTop(ctx, R, uncArrays, axis, yPix);
+  if (uncArrays) drawUncertaintyOverlaysTop(ctx, R, uncArrays, axis, yPix, lim);
   var pts = topProfilePoints(values, axis);
   drawProfilePathXY(ctx, R, pts.xs, pts.ys, yPix);
   ctx.textAlign='right'; ctx.textBaseline='middle';
@@ -1056,6 +1095,7 @@ function drawSideProfile(ctx, R, values, yCenter, lim, isDepthProfile, selIdx, y
       var arr = uncArrays[suf]; if (!arr) return;
       var st = UNC_SPEC[suf];
       drawSideProfilePathStyled(ctx, R, arr, yCenter, xPix, { color: profileUncColor(0.5), width: st.width, dash: st.dash });
+      markOffScaleSide(ctx, R, arr, yCenter, lim);
     });
   }
   ctx.save(); ctx.beginPath(); ctx.rect(R.x,R.y,R.w,R.h); ctx.clip();

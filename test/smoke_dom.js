@@ -184,6 +184,17 @@ try {
     var sysMax = Math.max.apply(null, Array.prototype.filter.call(S.secUnc.systematic_uncertainty_upper.monthArr, isFinite));
     chk('fit-precision OFF still covers systematic bounds', limWithout >= sysMax);
     chk('fit-precision toggle visible (precision companion + marginals shown)', G.precisionToggleShown());
+    // Off-scale arrowheads: when a bound runs past the panel's value range the
+    // clipped line is annotated with small edge markers (drawOffScaleMarker is
+    // the only ctx.fill() on the section canvas), so they appear with fit
+    // precision OFF (bounds off-scale) and not with it ON (bounds in range).
+    var secCtx = document.getElementById('secCanvas').getContext('2d');
+    var fillCount = 0, realFill = secCtx.fill;
+    secCtx.fill = function () { fillCount++; return realFill.apply(this, arguments); };
+    S.autoRangePrecision = false; fillCount = 0; recomputeAll(); var marksOff = fillCount;
+    S.autoRangePrecision = true;  fillCount = 0; recomputeAll(); var marksOn = fillCount;
+    secCtx.fill = realFill;
+    chk('off-scale arrowheads drawn only when a bound exceeds the range', marksOff > 0 && marksOn === 0);
     S.autoRangePrecision = true; recomputeAll();
     // Switching to a variable with no companions clears the overlays and hides
     // the fit-precision toggle.
