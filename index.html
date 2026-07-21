@@ -138,7 +138,7 @@
   <div class="panelwrap">
     <h3 id="latMonthTitle">month × lat</h3>
     <canvas id="latMonthCanvas"></canvas>
-    <div class="hint" style="text-align:center">Averaged over the depth range selected on the section and the longitude range selected on the map, above. No selection here.</div>
+    <div class="hint" style="text-align:center">Averaged over the depth range selected on the section and the longitude range selected on the map, above. No selection here. Drag the month labels below to pan (linked with the section panel).</div>
   </div>
 </div>
 
@@ -1232,10 +1232,10 @@ function drawLatMonth(sharedH) {
   var ctx = setupCanvas(cv, cssW, cssH), R = plotRect(cssW, cssH, false);
   var m = S.model, nM = m.sizes.month, nY = m.sizes.lat;
   var latE = m.coords.latEdges, lat0 = latE[0], lat1 = latE[nY];
-  var monthAxis = {
-    leftPix: function (c) { return R.x + (c / nM) * R.w; },
-    rightPix: function (c) { return R.x + ((c + 1) / nM) * R.w; }
-  };
+  // Same rotated (pannable) month axis as the section panel, and driven by
+  // the same S.monthOffset, so the two stay linked — dragging either one
+  // pans both.
+  var monthAxis = buildRotatedAxis(R, nM, S.monthOffset, function () { return R.w / nM; });
   var yEdgePix = function (r) { return R.y + (1 - (latE[r] - lat0) / (lat1 - lat0)) * R.h; }; // lat up
   ctx.clearRect(0, 0, cssW, cssH);
   drawCells(ctx, R, nM, nY, monthAxis, yEdgePix, function (r, c) { return S.latMonthArr[r * nM + c]; }, S.latMonthLim);
@@ -1248,7 +1248,7 @@ function drawLatMonth(sharedH) {
   // latitude" obvious, so it needs an explicit axis label.
   ctx.save(); ctx.translate(14, R.y + R.h / 2); ctx.rotate(-Math.PI / 2); ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText('latitude', 0, 0); ctx.restore();
   drawColorbar(ctx, cssW, R, varLabel(), S.latMonthLim);
-  latMonthGeom = { R: R, cv: cv };
+  latMonthGeom = { R: R, cv: cv, colAxis: monthAxis };
 }
 
 function varLabel(){ var v=S.model.vars[S.varName]; return v.name + (v.units?' ('+v.units+')':'') + (S.log?' [log]':''); }
@@ -1394,13 +1394,15 @@ function panelAxisMouseMove(ev, P) {
   var newOffset = wrapMod(P.panStartOffset - deltaCols, N);
   if (newOffset !== S[P.offsetKey]) { S[P.offsetKey] = newOffset; draw(); }
 }
-// Cursor affordance: ew-resize over the draggable axis strip, crosshair elsewhere.
+// Cursor affordance: ew-resize over the draggable axis strip, P.elseCursor
+// (default 'crosshair', for panels that also support click-drag selection)
+// elsewhere.
 function panelAxisHover(ev, P) {
   if (P.panDragging) return;
   var g = P.getGeom(); if (!g) return;
   var p = relpos(ev, g.cv), axisTop = g.R.y + g.R.h, axisBottom = axisTop + MARG.b;
   var over = p.x >= g.R.x && p.x <= g.R.x + g.R.w && p.y >= axisTop && p.y <= axisBottom;
-  g.cv.style.cursor = over ? 'ew-resize' : 'crosshair';
+  g.cv.style.cursor = over ? 'ew-resize' : (P.elseCursor || 'crosshair');
 }
 
 function initInteraction() {
@@ -1409,12 +1411,22 @@ function initInteraction() {
     NC:function(){ return S.model.sizes.month; }, dragging:false, panDragging:false };
   var mapP = { focus:'map', boxKey:'boxLL', offsetKey:'lonOffset', getGeom:function(){ return mapGeom; }, pixelToCell:mapPixelToCell,
     NC:function(){ return S.model.sizes.lon; }, dragging:false, panDragging:false };
+  // The extra month x lat panel has no selection of its own, but its month
+  // axis is pannable — sharing S.monthOffset with secP is what keeps the two
+  // linked, since dragging either one just writes the same state field.
+  var latMonthCv = document.getElementById('latMonthCanvas');
+  var latMonthP = { offsetKey:'monthOffset', getGeom:function(){ return latMonthGeom; },
+    NC:function(){ return S.model.sizes.month; }, panDragging:false, elseCursor:'default' };
   secCv.addEventListener('mousedown', function(e){ panelAxisMouseDown(e, secP); panelMouseDown(e, secP); });
   mapCv.addEventListener('mousedown', function(e){ panelAxisMouseDown(e, mapP); panelMouseDown(e, mapP); });
+  latMonthCv.addEventListener('mousedown', function(e){ panelAxisMouseDown(e, latMonthP); });
   secCv.addEventListener('mousemove', function(e){ panelAxisHover(e, secP); });
   mapCv.addEventListener('mousemove', function(e){ panelAxisHover(e, mapP); });
-  document.addEventListener('mousemove', function(e){ panelMouseMove(e, secP); panelMouseMove(e, mapP); panelAxisMouseMove(e, secP); panelAxisMouseMove(e, mapP); });
-  document.addEventListener('mouseup', function(){ secP.dragging = false; mapP.dragging = false; secP.panDragging = false; mapP.panDragging = false; });
+  latMonthCv.addEventListener('mousemove', function(e){ panelAxisHover(e, latMonthP); });
+  document.addEventListener('mousemove', function(e){ panelMouseMove(e, secP); panelMouseMove(e, mapP);
+    panelAxisMouseMove(e, secP); panelAxisMouseMove(e, mapP); panelAxisMouseMove(e, latMonthP); });
+  document.addEventListener('mouseup', function(){ secP.dragging = false; mapP.dragging = false;
+    secP.panDragging = false; mapP.panDragging = false; latMonthP.panDragging = false; });
   // clicking anywhere in a panel (title, padding) switches focus without editing
   secCv.parentElement.addEventListener('mousedown', function(){ setFocus('section'); });
   mapCv.parentElement.addEventListener('mousedown', function(){ setFocus('map'); });

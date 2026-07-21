@@ -80,7 +80,7 @@ try {
   var m = html.match(/<script>([\s\S]*?)<\/script>\s*<\/body>/);
   if (!m) throw new Error('could not extract inline script');
   // strict-mode eval keeps declarations local, so expose what we need to assert on
-  eval(m[1] + '\n;globalThis.__gv = { S: S, recomputeAll: recomputeAll, recomputeKeep: recomputeKeep, loadModelFromBuffer: loadModelFromBuffer, loadPublished: loadPublished, panelRects: panelRects, landLoaded: function(){ return LAND != null; }, land: function(){ return LAND; }, csvSectionGrid: csvSectionGrid, csvMapLong: csvMapLong, jsonExport: jsonExport, draw: draw, buildRotatedAxis: buildRotatedAxis, axisPixelToDataCol: axisPixelToDataCol, wrapMod: wrapMod };');
+  eval(m[1] + '\n;globalThis.__gv = { S: S, recomputeAll: recomputeAll, recomputeKeep: recomputeKeep, loadModelFromBuffer: loadModelFromBuffer, loadPublished: loadPublished, panelRects: panelRects, landLoaded: function(){ return LAND != null; }, land: function(){ return LAND; }, csvSectionGrid: csvSectionGrid, csvMapLong: csvMapLong, jsonExport: jsonExport, draw: draw, buildRotatedAxis: buildRotatedAxis, axisPixelToDataCol: axisPixelToDataCol, wrapMod: wrapMod, secGeom: function(){ return secGeom; }, latMonthGeom: function(){ return latMonthGeom; } };');
   var G = globalThis.__gv, S = G.S;
   var recomputeAll = G.recomputeAll, recomputeKeep = G.recomputeKeep;
   // the app now starts blank; drive the file-load path directly
@@ -125,6 +125,14 @@ try {
   chk('latMonth sized lat*month', S.latMonthArr.length === S.model.sizes.lat * S.model.sizes.month);
   chk('extra panels have finite data', S.depthLatArr.some(function(v){return isFinite(v);}) && S.latMonthArr.some(function(v){return isFinite(v);}));
   G.draw();   // exercise drawDepthLat/drawLatMonth without throwing
+  // The extra month x lat panel's month axis is pannable and linked with the
+  // section panel's — they share S.monthOffset, so panning either moves both.
+  S.monthOffset = 5; G.draw();
+  var secOrder = G.secGeom().colAxis.order.join(','), latMonthOrder = G.latMonthGeom().colAxis.order.join(',');
+  chk('extra panel month axis reflects a nonzero offset', G.latMonthGeom().colAxis.order[0] === 5);
+  chk('extra panel month axis stays linked with the section panel', latMonthOrder === secOrder);
+  S.monthOffset = 0; G.draw();
+  chk('both month axes track back to zero offset together', G.secGeom().colAxis.order.join(',') === G.latMonthGeom().colAxis.order.join(','));
   S.weightMode = 'n_bbp'; recomputeAll();
   chk('n_bbp extra panels ok', S.depthLatArr.length > 0 && S.latMonthArr.length > 0);
   S.weightMode = 'physical'; recomputeAll();

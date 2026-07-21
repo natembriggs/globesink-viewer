@@ -38,7 +38,9 @@ selection stays on each panel as a thin magenta rectangle.
   the main panels. They have no selection of their own; instead they keep
   depth+latitude (or month+latitude) as full axes and average over the other
   two dimensions using whatever ranges are currently selected on the section
-  and map above, so they update live as those selections change.
+  and map above, so they update live as those selections change. The month ×
+  latitude panel's month axis is pannable, same as the section panel's, and
+  the two are linked — dragging either one pans both together.
 - **Log / linear** colour scale.
 - **Missing-value policy:** *ignore in mean* (nan-mean) or *missing if any*
   (the average is blank if any contributing cell is missing).
@@ -173,7 +175,7 @@ collapses (including the discontiguous-selection union rule), the extra-panel
 conditions — against `numpy` values or hand-derived cases — and (2) runs the
 full `index.html` wiring (including all four marginal profiles, both extra
 panels, both weighting modes, and linked/unlinked scales) against a stubbed
-DOM/Canvas to catch runtime errors. Currently 69 core checks + 73 wiring
+DOM/Canvas to catch runtime errors. Currently 69 core checks + 76 wiring
 checks, all passing. Rendering itself (pixels, drag interactions, visual
 alignment of the marginal/extra panels) can only be verified in a real browser.
 
