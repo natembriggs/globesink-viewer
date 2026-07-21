@@ -76,7 +76,12 @@ selection stays on each panel as a thin magenta rectangle.
 - **Colour controls:** several colormaps and manual or automatic (robust
   2–98th percentile) colour limits. With auto on, **link panels** shares one
   value scale across every visible heatmap and marginal panel. When unlinked,
-  each marginal line plot uses its own range containing every plotted value.
+  each marginal line plot uses its own range containing every plotted value. A
+  **fit precision** toggle (shown only when the selected variable has precision
+  companions and a marginal panel is on) controls whether the — sometimes very
+  wide — precision bound lines are allowed to stretch the auto range; turn it
+  off to scale to the data and let those bounds run off-panel. Systematic bounds
+  are always included.
 - **Excel-like cell selection:** click or drag to select (snapping to whole
   cells, updating the other panel live); **shift+click** extends the box from
   its anchor; **⌘/Ctrl+click** adds or removes an individual cell (discontiguous

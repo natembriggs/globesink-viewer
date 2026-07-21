@@ -80,7 +80,7 @@ try {
   var m = html.match(/<script>([\s\S]*?)<\/script>\s*<\/body>/);
   if (!m) throw new Error('could not extract inline script');
   // strict-mode eval keeps declarations local, so expose what we need to assert on
-  eval(m[1] + '\n;globalThis.__gv = { S: S, recomputeAll: recomputeAll, recomputeKeep: recomputeKeep, loadModelFromBuffer: loadModelFromBuffer, loadPublished: loadPublished, panelRects: panelRects, landLoaded: function(){ return LAND != null; }, land: function(){ return LAND; }, csvSectionGrid: csvSectionGrid, csvMapLong: csvMapLong, jsonExport: jsonExport, draw: draw, buildRotatedAxis: buildRotatedAxis, axisPixelToDataCol: axisPixelToDataCol, wrapMod: wrapMod, secGeom: function(){ return secGeom; }, latMonthGeom: function(){ return latMonthGeom; }, depthLatGeom: function(){ return depthLatGeom; }, depthLatBox: depthLatBox, commitDepthLatBox: commitDepthLatBox, latMonthBox: latMonthBox, commitLatMonthBox: commitLatMonthBox, productSet: productSet, bboxRange: bboxRange, syncAnchors: syncAnchors };');
+  eval(m[1] + '\n;globalThis.__gv = { S: S, recomputeAll: recomputeAll, recomputeKeep: recomputeKeep, loadModelFromBuffer: loadModelFromBuffer, loadPublished: loadPublished, panelRects: panelRects, landLoaded: function(){ return LAND != null; }, land: function(){ return LAND; }, csvSectionGrid: csvSectionGrid, csvMapLong: csvMapLong, jsonExport: jsonExport, draw: draw, buildRotatedAxis: buildRotatedAxis, axisPixelToDataCol: axisPixelToDataCol, wrapMod: wrapMod, secGeom: function(){ return secGeom; }, latMonthGeom: function(){ return latMonthGeom; }, depthLatGeom: function(){ return depthLatGeom; }, depthLatBox: depthLatBox, commitDepthLatBox: commitDepthLatBox, latMonthBox: latMonthBox, commitLatMonthBox: commitLatMonthBox, productSet: productSet, bboxRange: bboxRange, syncAnchors: syncAnchors, precisionToggleShown: function(){ return document.getElementById(\'autoPrecLabel\').style.display !== \'none\'; } };');
   var G = globalThis.__gv, S = G.S;
   var recomputeAll = G.recomputeAll, recomputeKeep = G.recomputeKeep;
   // the app now starts blank; drive the file-load path directly
@@ -174,10 +174,28 @@ try {
     chk('shared colour range stretches to cover the overlay bounds', S.secMonthLim[1] >= Math.max.apply(null,
       Array.prototype.filter.call(S.secUnc.systematic_uncertainty_upper.monthArr, isFinite)));
     G.draw();  // exercise the dashed-precision / thin-systematic overlay drawing paths without throwing
-    // Switching to a variable with no companions clears the overlays.
+    // "fit precision" toggle: with it OFF the auto range must NOT stretch to the
+    // (here deliberately huge) precision bounds, but must still cover systematic.
+    var hugePrec = S.model.vars['POC_flux_precision_upper'].data;
+    for (var i = 0; i < hugePrec.length; i++) if (!isNaN(hugePrec[i])) hugePrec[i] *= 50;
+    S.autoRangePrecision = true; recomputeAll(); var limWith = S.secMonthLim[1];
+    S.autoRangePrecision = false; recomputeAll(); var limWithout = S.secMonthLim[1];
+    chk('fit-precision ON stretches range to the precision bounds', limWith > limWithout);
+    var sysMax = Math.max.apply(null, Array.prototype.filter.call(S.secUnc.systematic_uncertainty_upper.monthArr, isFinite));
+    chk('fit-precision OFF still covers systematic bounds', limWithout >= sysMax);
+    chk('fit-precision toggle visible (precision companion + marginals shown)', G.precisionToggleShown());
+    S.autoRangePrecision = true; recomputeAll();
+    // Switching to a variable with no companions clears the overlays and hides
+    // the fit-precision toggle.
     S.varName = 'n_bbp'; recomputeAll();
     chk('uncertainty companions absent for a plain variable', Object.keys(S.uncVars).length === 0 &&
       Object.keys(S.secUnc).length === 0 && Object.keys(S.mapUnc).length === 0);
+    chk('fit-precision toggle hidden for a variable without precision', !G.precisionToggleShown());
+    S.varName = 'POC_flux'; recomputeAll();
+    // ...and hidden again once marginal panels are turned off.
+    S.secProfiles = false; S.mapProfiles = false; recomputeAll();
+    chk('fit-precision toggle hidden when no marginal panels are shown', !G.precisionToggleShown());
+    S.secProfiles = true; S.mapProfiles = true; recomputeAll();
   })();
 
   // extra panels below the main two: lat x depth and month x lat, averaged

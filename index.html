@@ -91,6 +91,7 @@
     <div style="display:flex;gap:6px;align-items:center">
       <label class="hint"><input type="checkbox" id="autoRange" checked> auto</label>
       <label class="hint" title="Use one value scale for every visible heatmap and marginal panel"><input type="checkbox" id="linkScales" checked> link panels</label>
+      <label class="hint" id="autoPrecLabel" style="display:none" title="Include the precision bound lines when auto-fitting the colour range. Precision intervals can be very wide, so turn this off to scale to the data and let the bounds run off-panel."><input type="checkbox" id="autoRangePrecision" checked> fit precision</label>
       <input type="number" id="vmin" class="range-in" step="any" disabled>
       <input type="number" id="vmax" class="range-in" step="any" disabled>
     </div>
@@ -191,6 +192,18 @@ function companionUncVars(model, varName) {
   });
   return out;
 }
+// Whether a companion suffix's bound line should stretch the auto colour range.
+// Precision bounds can be enormous, so they're gated behind the "fit precision"
+// toggle; systematic bounds are always folded in.
+function foldUncInAutoRange(suf) {
+  return UNC_SPEC[suf].kind !== 'precision' || S.autoRangePrecision;
+}
+// Does the current variable have precision companions? (Controls the "fit
+// precision" toggle's visibility.)
+function hasPrecisionCompanion() {
+  var unc = companionUncVars(S.model, S.varName);
+  return !!(unc.precision_lower || unc.precision_upper);
+}
 // per-variable default colormap
 function defaultCmapFor(v){
   if (/chl/i.test(v)) return 'greens';       // chlorophyll
@@ -223,7 +236,7 @@ var S = {
   model: null, varName: null, cmap: 'reds', log: false, strict: false,
   weightMode: 'physical',
   secProfiles: false, mapProfiles: false, extraPanels: false,
-  autoRange: true, linkScales: true, vmin: 0, vmax: 1,
+  autoRange: true, linkScales: true, autoRangePrecision: true, vmin: 0, vmax: 1,
   secLim: [0, 1], mapLim: [0, 1],
   secMonthLim: [0, 1], secDepthLim: [0, 1], mapLonLim: [0, 1], mapLatLim: [0, 1],
   depthLatLim: [0, 1], latMonthLim: [0, 1],
@@ -429,12 +442,14 @@ function recomputeAll() {
       if (S.secProfiles) {
         marginals.push(S.secMonthArr, secDepthDeep);
         Object.keys(S.secUnc).forEach(function (suf) {
+          if (!foldUncInAutoRange(suf)) return;
           marginals.push(S.secUnc[suf].monthArr, maskShallowProfile(S.secUnc[suf].depthArr, topRow));
         });
       }
       if (S.mapProfiles) {
         marginals.push(S.mapLonArr, S.mapLatArr);
         Object.keys(S.mapUnc).forEach(function (suf) {
+          if (!foldUncInAutoRange(suf)) return;
           marginals.push(S.mapUnc[suf].lonArr, S.mapUnc[suf].latArr);
         });
       }
@@ -451,10 +466,12 @@ function recomputeAll() {
       S.mapLonLim = fullArrayLimits(S.mapLonArr, S.log);
       S.mapLatLim = fullArrayLimits(S.mapLatArr, S.log);
       Object.keys(S.secUnc).forEach(function (suf) {
+        if (!foldUncInAutoRange(suf)) return;
         S.secMonthLim = includeArrayLimits(S.secMonthLim, S.secUnc[suf].monthArr, S.log);
         S.secDepthLim = includeArrayLimits(S.secDepthLim, S.secUnc[suf].depthArr, S.log);
       });
       Object.keys(S.mapUnc).forEach(function (suf) {
+        if (!foldUncInAutoRange(suf)) return;
         S.mapLonLim = includeArrayLimits(S.mapLonLim, S.mapUnc[suf].lonArr, S.log);
         S.mapLatLim = includeArrayLimits(S.mapLatLim, S.mapUnc[suf].latArr, S.log);
       });
@@ -473,7 +490,15 @@ function recomputeAll() {
     setAllLimits([S.vmin, S.vmax]);
   }
   updateTitles();
+  updatePrecisionToggle();
   draw();
+}
+// The "fit precision" toggle only makes sense when precision bound lines are
+// actually on screen: a variable with precision companions AND some marginal
+// panel showing them. Hide it otherwise.
+function updatePrecisionToggle() {
+  var show = !!S.model && S.autoRange && hasPrecisionCompanion() && (S.secProfiles || S.mapProfiles);
+  document.getElementById('autoPrecLabel').style.display = show ? '' : 'none';
 }
 function scaledWeights(base, nRows, nCols, rowFactor, colFactor, cellFactor) {
   var out = new Float64Array(nRows * nCols);
@@ -1929,6 +1954,7 @@ document.getElementById('autoRange').onchange = function(e){ S.autoRange = e.tar
   document.getElementById('vmin').disabled = e.target.checked; document.getElementById('vmax').disabled = e.target.checked;
   document.getElementById('linkScales').disabled = !e.target.checked; recomputeAll(); };
 document.getElementById('linkScales').onchange = function(e){ S.linkScales = e.target.checked; recomputeAll(); };
+document.getElementById('autoRangePrecision').onchange = function(e){ S.autoRangePrecision = e.target.checked; recomputeAll(); };
 document.getElementById('vmin').oninput = function(e){ S.vmin = +e.target.value; setAllLimits([S.vmin, S.vmax]); draw(); };
 document.getElementById('vmax').oninput = function(e){ S.vmax = +e.target.value; setAllLimits([S.vmin, S.vmax]); draw(); };
 document.getElementById('addCond').onclick = function(){ if(!S.model)return; S.conditions.push({varName:S.model.varNames[0],op:'>=',value:0}); renderConds(); };
