@@ -488,27 +488,30 @@
 
   // ---- combining a RANDOM (precision) uncertainty through the same means ----
   //
-  // sectionReduce/mapReduce form a weighted mean  xbar = sum(w x)/sum(w). When
-  // the quantity being averaged carries an UNCORRELATED per-cell error, the
-  // error of that weighted mean propagates in quadrature:
+  // sectionReduce/mapReduce form a weighted mean  xbar = sum(w x)/sum(w). The
+  // stored precision is the (Poisson-counting-derived) uncertainty of each grid
+  // cell's own MEAN value — already the precision of a mean, not of a single
+  // measurement (see GLOBESINK_get_spike_uncertainties.m). Treating those cell
+  // errors as independent, the error of the weighted mean propagates in plain
+  // quadrature:
   //
   //     sigma_xbar = sqrt( sum_i w_i^2 * sigma_i^2 ) / sum_i w_i
   //
-  // Two further points make this match how precision actually behaves here:
-  //  1. The stored precision applies to a SINGLE measurement, but each grid
-  //     cell's value is itself a mean of n_bbp measurements, so that cell's
-  //     value has precision sigma_i / sqrt(n_i). We divide by n_i (=n_bbp)
-  //     inside the sum: the per-cell contribution is w_i^2 * sigma_i^2 / n_i.
-  //  2. Weighting by n_bbp then makes the combined precision fall like
-  //     1/sqrt(sum n_i) (the pooled sample size), while area/depth/month
-  //     weighting lets a single imprecise cell with small n_i dominate — the
-  //     two behaviours the two averaging modes are meant to express.
-  // When n_bbp is absent the stored value is taken as the cell precision (n=1).
+  // No extra 1/sqrt(n) is applied here — the within-cell averaging is already
+  // baked into sigma_i (a cell built from few particles simply carries a large
+  // sigma_i). That is exactly what makes the two averaging modes behave as
+  // intended:
+  //   - n_bbp weighting (w_i = n_bbp) down-weights those imprecise low-count
+  //     cells, so the combined precision falls quickly — in the Poisson limit
+  //     sigma_i = sqrt(N_i)/n_i, this quadrature reduces to sqrt(sum N_i)/sum n_i,
+  //     i.e. exactly pooling the underlying particle counts; whereas
+  //   - area/depth/month weighting keeps a single imprecise small-n cell at
+  //     full weight, so it can dominate sum w_i^2 sigma_i^2 and the combined
+  //     precision falls little.
   // sectionReduceQuad mirrors sectionReduce's cell set / keep-mask / weights.
   function sectionReduceQuad(model, varName, keep, cellsYX, weightMode, weightOut) {
     var s = model.sizes, nP = s.depth, nY = s.lat, nX = s.lon, nM = s.month;
     var d = model.vars[varName].data, nC = cellsYX.length, nw = nBbpWeights(model, weightMode || 'physical');
-    var nCount = model.vars.n_bbp ? model.vars.n_bbp.data : null;
     var physicalW = new Float64Array(nC);
     if (!nw) for (var c = 0; c < nC; c++) physicalW[c] = model.weights.area[cellsYX[c][0] * nX + cellsYX[c][1]];
     var out = new Float32Array(nP * nM);
@@ -522,9 +525,7 @@
           if (!isFinite(w) || w <= 0) continue;
           var v = d[idx];
           if (isNaN(v)) continue;
-          var n = nCount ? nCount[idx] : 1;
-          if (!isFinite(n) || n <= 0) n = 1;
-          sumW += w; acc += w * w * v * v / n;
+          sumW += w; acc += w * w * v * v;
         }
         var oi = p * nM + m;
         out[oi] = sumW === 0 ? NaN : Math.sqrt(acc) / sumW;
@@ -536,7 +537,6 @@
   function mapReduceQuad(model, varName, keep, cellsPM, weightMode, weightOut) {
     var s = model.sizes, nP = s.depth, nY = s.lat, nX = s.lon, nM = s.month;
     var d = model.vars[varName].data, nC = cellsPM.length, nw = nBbpWeights(model, weightMode || 'physical');
-    var nCount = model.vars.n_bbp ? model.vars.n_bbp.data : null;
     var physicalW = new Float64Array(nC);
     if (!nw) for (var c = 0; c < nC; c++) physicalW[c] = model.weights.depth[cellsPM[c][0]] * model.weights.month[cellsPM[c][1]];
     var out = new Float32Array(nY * nX);
@@ -550,9 +550,7 @@
           if (!isFinite(w) || w <= 0) continue;
           var v = d[idx];
           if (isNaN(v)) continue;
-          var n = nCount ? nCount[idx] : 1;
-          if (!isFinite(n) || n <= 0) n = 1;
-          sumW += w; acc += w * w * v * v / n;
+          sumW += w; acc += w * w * v * v;
         }
         var oi = y * nX + x;
         out[oi] = sumW === 0 ? NaN : Math.sqrt(acc) / sumW;

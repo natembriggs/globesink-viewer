@@ -167,10 +167,9 @@ var CORE_VARS = ['C_200_400','C_400_800','C_800','CHLA_ADJUSTED','D_mean','flux_
 //
 // The two uncertainty terms combine differently under the panel averaging,
 // because they are physically different (see combined-uncertainty helpers):
-//   - precision is random / uncorrelated between cells, so it averages down —
-//     combined in quadrature, and each cell's stored (single-measurement)
-//     precision is first divided by sqrt(n_bbp) to get that cell's mean value's
-//     precision; and
+//   - precision is random / uncorrelated between cells (the stored value is
+//     already each cell mean's Poisson-counting precision), so it averages
+//     down — combined in plain quadrature; and
 //   - systematic uncertainty is correlated between cells, so it does NOT
 //     average down — combined as the ordinary weighted mean (same reducer as
 //     the value itself).
@@ -490,7 +489,7 @@ function scaledWeights(base, nRows, nCols, rowFactor, colFactor, cellFactor) {
 // Combined uncertainty MAGNITUDE profiles for a companion variable, reduced
 // over the same selection/weighting as the main profile. `kind` decides how it
 // combines under averaging (see UNC_SPEC / the core reducers):
-//   - 'precision'  → quadrature, with the per-cell 1/sqrt(n_bbp) reduction
+//   - 'precision'  → plain quadrature of the per-cell mean precisions
 //                    (sectionReduceQuad + quadMarginal*);
 //   - 'systematic' → ordinary weighted mean (same reducers as the value).
 // Returns raw magnitudes; recomputeProfiles turns them into base ± magnitude.

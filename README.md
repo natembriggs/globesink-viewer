@@ -187,18 +187,20 @@ magnitudes, so a profile's bounds are `base − lower` and `base + upper`. But t
 two terms combine differently when a panel averages many cells, because they are
 physically different:
 
-- **Precision** is random/uncorrelated between cells, so it averages *down*. For
-  a weighted mean `x̄ = Σ wᵢ xᵢ / Σ wᵢ` of independent terms, the error
-  propagates in quadrature:
-  `σ_x̄ = √(Σ wᵢ² σᵢ² / nᵢ) / Σ wᵢ`,
-  where `σᵢ` is the stored (single-measurement) precision and the `1/√nᵢ`
-  (`nᵢ = n_bbp`) accounts for each cell value already being a mean of `nᵢ`
-  measurements. Consequently, under **n_bbp weighting** the combined precision
-  falls like `1/√(Σ nᵢ)` — the pooled sample size, so it drops quickly as more
-  cells are averaged — whereas under **area/depth/month weighting** a single
-  imprecise cell with small `nᵢ` can dominate `Σ wᵢ² σᵢ²/nᵢ`, so the combined
-  precision may fall little. If a file has no `n_bbp`, the stored value is taken
-  as the cell precision (`nᵢ = 1`).
+- **Precision** is random/uncorrelated between cells, so it averages *down*. The
+  stored precision is already each cell **mean's** precision (a Poisson
+  counting error from the particle counts behind that cell — see
+  `GLOBESINK_get_spike_uncertainties.m`), so combining independent cell means in
+  a weighted mean `x̄ = Σ wᵢ xᵢ / Σ wᵢ` gives plain quadrature:
+  `σ_x̄ = √(Σ wᵢ² σᵢ²) / Σ wᵢ`
+  (no extra `1/√n` — the within-cell averaging is already baked into `σᵢ`, so a
+  cell built from few particles simply carries a large `σᵢ`). This reproduces
+  the two intended behaviours directly: under **n_bbp weighting** those
+  imprecise low-count cells are down-weighted, so the combined precision falls
+  quickly — in the Poisson limit `σᵢ = √Nᵢ/nᵢ` it reduces to `√(Σ Nᵢ)/Σ nᵢ`,
+  i.e. exactly pooling the underlying particle counts — whereas under
+  **area/depth/month weighting** a single small-`n` cell stays at full weight
+  and can dominate `Σ wᵢ² σᵢ²`, so the combined precision may fall little.
 - **Systematic uncertainty** is correlated between cells, so it does *not*
   average down: the combined value is the ordinary weighted mean of the cell
   magnitudes — the same reducer used for the value itself.
