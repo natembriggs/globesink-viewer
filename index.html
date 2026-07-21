@@ -157,6 +157,28 @@ var DATASET_DOI = 'https://doi.org/10.5281/zenodo.19558504';
 // the 8 variables in the built-in minimal files; listed first in the variable
 // menu when a fuller file is loaded
 var CORE_VARS = ['C_200_400','C_400_800','C_800','CHLA_ADJUSTED','D_mean','flux_POC','n_bbp','POCs'];
+// A variable "X" in the fuller published dataset may have companion
+// "X_precision_lower/upper" and/or "X_systematic_uncertainty_lower/upper"
+// variables — the lower/upper bounds of each uncertainty term (not additive
+// deltas). When present for the selected variable, they're overlaid on the
+// depth/lat/lon/month profile panels: precision as a dashed line, systematic
+// uncertainty as a thin solid line, both in the main line's own colour.
+var UNC_SUFFIXES = ['precision_lower', 'precision_upper', 'systematic_uncertainty_lower', 'systematic_uncertainty_upper'];
+var UNC_STYLE = {
+  precision_lower:              { width: 1.5, dash: [5, 3] },
+  precision_upper:              { width: 1.5, dash: [5, 3] },
+  systematic_uncertainty_lower: { width: 1,   dash: null },
+  systematic_uncertainty_upper: { width: 1,   dash: null }
+};
+function companionUncVars(model, varName) {
+  var out = {};
+  if (!model || !varName) return out;
+  UNC_SUFFIXES.forEach(function (suf) {
+    var name = varName + '_' + suf;
+    if (model.vars[name]) out[suf] = name;
+  });
+  return out;
+}
 // per-variable default colormap
 function defaultCmapFor(v){
   if (/chl/i.test(v)) return 'greens';       // chlorophyll
@@ -206,7 +228,11 @@ var S = {
   conditions: [], keep: null,
   secArr: null, mapArr: null, secWeight: null, mapWeight: null,
   secMonthArr: null, secDepthArr: null, mapLonArr: null, mapLatArr: null,
-  depthLatArr: null, latMonthArr: null, depthLatWeight: null, latMonthWeight: null
+  depthLatArr: null, latMonthArr: null, depthLatWeight: null, latMonthWeight: null,
+  // companion precision/systematic-uncertainty profiles for the current variable
+  // (see companionUncVars); keyed by suffix, each value {monthArr,depthArr} or
+  // {lonArr,latArr}. Empty when the variable has no such companions.
+  uncVars: {}, secUnc: {}, mapUnc: {}
 };
 
 function fmtLat(v){ return (Math.abs(v)).toFixed(0) + (v>=0?'°N':'°S'); }
@@ -218,7 +244,12 @@ function updateVarDesc(){
   var el = document.getElementById('varDesc');
   if (!S.model || !S.varName) { el.textContent = ''; return; }
   var desc = S.model.vars[S.varName].long_name;
-  el.textContent = (desc && desc !== S.varName) ? capitalize(desc) : '';
+  var text = (desc && desc !== S.varName) ? capitalize(desc) : '';
+  var unc = companionUncVars(S.model, S.varName), bits = [];
+  if (unc.precision_lower || unc.precision_upper) bits.push('precision (dashed)');
+  if (unc.systematic_uncertainty_lower || unc.systematic_uncertainty_upper) bits.push('systematic uncertainty (thin)');
+  if (bits.length) text = (text ? text + ' — ' : '') + bits.join(' & ') + ' shown on side panels.';
+  el.textContent = text;
 }
 
 // ---------- carrying the current view across a dataset switch ----------
@@ -380,8 +411,21 @@ function recomputeAll() {
       var heatmaps = [secArrDeep, S.mapArr];
       if (S.extraPanels) heatmaps.push(S.depthLatArr, S.latMonthArr);
       var marginals = [];
-      if (S.secProfiles) marginals.push(S.secMonthArr, secDepthDeep);
-      if (S.mapProfiles) marginals.push(S.mapLonArr, S.mapLatArr);
+      // Uncertainty overlay lines must also stay fully on-panel, so their
+      // extrema are folded into the shared colour range alongside the main
+      // variable's own marginal profiles.
+      if (S.secProfiles) {
+        marginals.push(S.secMonthArr, secDepthDeep);
+        Object.keys(S.secUnc).forEach(function (suf) {
+          marginals.push(S.secUnc[suf].monthArr, maskShallowProfile(S.secUnc[suf].depthArr, topRow));
+        });
+      }
+      if (S.mapProfiles) {
+        marginals.push(S.mapLonArr, S.mapLatArr);
+        Object.keys(S.mapUnc).forEach(function (suf) {
+          marginals.push(S.mapUnc[suf].lonArr, S.mapUnc[suf].latArr);
+        });
+      }
       var all = concatArrays(heatmaps.concat(marginals)), lim = GVCore.robustLimits(all, 0.02, 0.98, S.log);
       marginals.forEach(function(a){ lim = includeArrayLimits(lim, a, S.log); });
       // 5% headroom above the auto max so a marginal peak at the limit isn't
@@ -394,6 +438,14 @@ function recomputeAll() {
       S.secDepthLim = fullArrayLimits(S.secDepthArr, S.log);
       S.mapLonLim = fullArrayLimits(S.mapLonArr, S.log);
       S.mapLatLim = fullArrayLimits(S.mapLatArr, S.log);
+      Object.keys(S.secUnc).forEach(function (suf) {
+        S.secMonthLim = includeArrayLimits(S.secMonthLim, S.secUnc[suf].monthArr, S.log);
+        S.secDepthLim = includeArrayLimits(S.secDepthLim, S.secUnc[suf].depthArr, S.log);
+      });
+      Object.keys(S.mapUnc).forEach(function (suf) {
+        S.mapLonLim = includeArrayLimits(S.mapLonLim, S.mapUnc[suf].lonArr, S.log);
+        S.mapLatLim = includeArrayLimits(S.mapLatLim, S.mapUnc[suf].latArr, S.log);
+      });
       if (S.extraPanels) {
         S.depthLatLim = safeLimits(GVCore.robustLimits(S.depthLatArr, 0.02, 0.98, S.log), S.log);
         S.latMonthLim = safeLimits(GVCore.robustLimits(S.latMonthArr, 0.02, 0.98, S.log), S.log);
@@ -422,8 +474,38 @@ function scaledWeights(base, nRows, nCols, rowFactor, colFactor, cellFactor) {
   }
   return out;
 }
+// Weighted depth/month (or lat/lon) marginal profile for an arbitrary variable,
+// computed exactly like the currently-plotted variable's own profile (same
+// selection, missing-value policy and weighting) — used for the precision /
+// systematic-uncertainty companion variables, which each need their own
+// reduction because their own NaN pattern (and hence effective weights) can
+// differ from the main variable's.
+function sectionProfilesFor(varName) {
+  var m = S.model, s = m.sizes;
+  var weight = new Float64Array(s.depth * s.month);
+  var arr = GVCore.sectionReduce(m, varName, S.keep, S.strict, GVCore.selCells(S.boxLL.set, s.lon), S.weightMode, weight);
+  var td = GVCore.selRowsCols(S.boxTD.set, s.month);
+  var topW = S.weightMode === 'physical' ? scaledWeights(weight, s.depth, s.month, m.weights.depth, null, null) : weight;
+  var sideW = S.weightMode === 'physical' ? scaledWeights(weight, s.depth, s.month, null, m.weights.month, null) : weight;
+  return {
+    monthArr: GVCore.marginalOverRows(arr, s.depth, s.month, td.rows, topW),
+    depthArr: GVCore.marginalOverCols(arr, s.depth, s.month, td.cols, sideW)
+  };
+}
+function mapProfilesFor(varName) {
+  var m = S.model, s = m.sizes;
+  var weight = new Float64Array(s.lat * s.lon);
+  var arr = GVCore.mapReduce(m, varName, S.keep, S.strict, GVCore.selCells(S.boxTD.set, s.month), S.weightMode, weight);
+  var ll = GVCore.selRowsCols(S.boxLL.set, s.lon);
+  var mapW = S.weightMode === 'physical' ? scaledWeights(weight, s.lat, s.lon, null, null, m.weights.area) : weight;
+  return {
+    lonArr: GVCore.marginalOverRows(arr, s.lat, s.lon, ll.rows, mapW),
+    latArr: GVCore.marginalOverCols(arr, s.lat, s.lon, ll.cols, mapW)
+  };
+}
 function recomputeProfiles() {
   var m = S.model, s = m.sizes;
+  S.uncVars = companionUncVars(m, S.varName);
   if (S.secProfiles) {
     var td = GVCore.selRowsCols(S.boxTD.set, s.month);
     var topW = S.weightMode === 'physical' ? scaledWeights(S.secWeight, s.depth, s.month, m.weights.depth, null, null) : S.secWeight;
@@ -432,13 +514,25 @@ function recomputeProfiles() {
     // for all months, and the union of every selected month column for all depths.
     S.secMonthArr = GVCore.marginalOverRows(S.secArr, s.depth, s.month, td.rows, topW);
     S.secDepthArr = GVCore.marginalOverCols(S.secArr, s.depth, s.month, td.cols, sideW);
-  } else { S.secMonthArr = S.secDepthArr = null; }
+    S.secUnc = {};
+    Object.keys(S.uncVars).forEach(function (suf) { S.secUnc[suf] = sectionProfilesFor(S.uncVars[suf]); });
+  } else { S.secMonthArr = S.secDepthArr = null; S.secUnc = {}; }
   if (S.mapProfiles) {
     var ll = GVCore.selRowsCols(S.boxLL.set, s.lon);
     var mapW = S.weightMode === 'physical' ? scaledWeights(S.mapWeight, s.lat, s.lon, null, null, m.weights.area) : S.mapWeight;
     S.mapLonArr = GVCore.marginalOverRows(S.mapArr, s.lat, s.lon, ll.rows, mapW);
     S.mapLatArr = GVCore.marginalOverCols(S.mapArr, s.lat, s.lon, ll.cols, mapW);
-  } else { S.mapLonArr = S.mapLatArr = null; }
+    S.mapUnc = {};
+    Object.keys(S.uncVars).forEach(function (suf) { S.mapUnc[suf] = mapProfilesFor(S.uncVars[suf]); });
+  } else { S.mapLonArr = S.mapLatArr = null; S.mapUnc = {}; }
+}
+// Flatten one profile axis ('monthArr'|'depthArr'|'lonArr'|'latArr') out of a
+// {suffix: {...}} companion-profile map into {suffix: Float32Array}, the shape
+// the profile-panel drawing code overlays alongside the main line.
+function uncOverlayArrays(uncMap, key) {
+  var out = {};
+  Object.keys(uncMap || {}).forEach(function (suf) { out[suf] = uncMap[suf][key]; });
+  return out;
 }
 // The two extra panels below keep depth+lat / month+lat as full axes and
 // reduce over the *other* two dimensions using the ranges currently selected
@@ -814,9 +908,13 @@ function valueAtFrac(lim, frac) {
   return S.log ? Math.exp(Math.log(lim[0]) + frac * (Math.log(lim[1]) - Math.log(lim[0]))) :
     lim[0] + frac * (lim[1] - lim[0]);
 }
-function drawProfilePathXY(ctx, R, xs, values, valuePix) {
+// Like the main profile line but with a configurable stroke style — used to
+// overlay the precision/systematic-uncertainty companion lines, which reuse
+// the main line's colour but are thinner and/or dashed.
+function drawProfilePathXYStyled(ctx, R, xs, values, valuePix, style) {
   ctx.save(); ctx.beginPath(); ctx.rect(R.x, R.y, R.w, R.h); ctx.clip();
-  ctx.beginPath(); ctx.strokeStyle = profileLineColor(); ctx.lineWidth = 2; ctx.lineJoin = 'round';
+  ctx.beginPath(); ctx.strokeStyle = style.color; ctx.lineWidth = style.width; ctx.lineJoin = 'round';
+  ctx.setLineDash(style.dash || []);
   var started = false;
   for (var i = 0; i < xs.length; i++) {
     var vp = valuePix(values[i]);
@@ -825,30 +923,75 @@ function drawProfilePathXY(ctx, R, xs, values, valuePix) {
   }
   ctx.stroke(); ctx.restore();
 }
+function drawProfilePathXY(ctx, R, xs, values, valuePix) {
+  drawProfilePathXYStyled(ctx, R, xs, values, valuePix, { color: profileLineColor(), width: 2 });
+}
+// Side-profile equivalent of drawProfilePathXYStyled: x comes from the value
+// (via xPix), y from the row/col index (via yCenter) — the inverse mapping of
+// the top profile, used for the section's depth axis and the map's lat axis.
+function drawSideProfilePathStyled(ctx, R, values, yCenter, xPix, style) {
+  ctx.save(); ctx.beginPath(); ctx.rect(R.x, R.y, R.w, R.h); ctx.clip();
+  ctx.beginPath(); ctx.strokeStyle = style.color; ctx.lineWidth = style.width; ctx.lineJoin = 'round';
+  ctx.setLineDash(style.dash || []);
+  var started = false;
+  for (var i = 0; i < values.length; i++) {
+    var xx = xPix(values[i]);
+    if (isNaN(xx)) { started = false; continue; }
+    var yy = yCenter(i);
+    if (started) ctx.lineTo(xx, yy); else { ctx.moveTo(xx, yy); started = true; }
+  }
+  ctx.stroke(); ctx.restore();
+}
+// Same wrap-around "ghost point" construction drawTopProfile uses for the main
+// line, factored out so the uncertainty overlay lines can build the same
+// xs/ys pairs for their own values array.
+function topProfilePoints(values, axis) {
+  var N = axis.order.length, xs = [axis.ghostLeftPix()], ys = [values[axis.order[N - 1]]];
+  for (var slot = 0; slot < N; slot++) { var dc = axis.order[slot]; xs.push((axis.leftPix(dc) + axis.rightPix(dc)) / 2); ys.push(values[dc]); }
+  xs.push(axis.ghostRightPix()); ys.push(values[axis.order[0]]);
+  return { xs: xs, ys: ys };
+}
+// Draw whichever of the precision/systematic-uncertainty companion lines are
+// present (see companionUncVars) behind the main line, in its own colour.
+// `uncArrays` is {suffix: Float32Array}, already the same shape as `values`.
+function drawUncertaintyOverlaysTop(ctx, R, uncArrays, axis, yPix) {
+  UNC_SUFFIXES.forEach(function (suf) {
+    var arr = uncArrays[suf]; if (!arr) return;
+    var pts = topProfilePoints(arr, axis), st = UNC_STYLE[suf];
+    drawProfilePathXYStyled(ctx, R, pts.xs, pts.ys, yPix, { color: profileLineColor(), width: st.width, dash: st.dash });
+  });
+}
 // Top marginal panels (month / longitude) plot every data column of the axis
 // even when only some are selected, so the two ends of the axis are genuine
 // neighbours (Dec wraps to Jan; the antimeridian wraps to itself). We add one
 // "ghost" point just past each end of the rotated axis — the far end's value,
 // drawn off-panel and clipped — so a value present at both ends draws as a
 // continuous wrap-around curve instead of stopping dead at the panel edge.
-function drawTopProfile(ctx, R, values, axis, lim, selIdx) {
+function drawTopProfile(ctx, R, values, axis, lim, selIdx, uncArrays) {
   frame(ctx, R); axisStyle(ctx);
   if (selIdx) drawTopSelBox(ctx, R, selIdx, axis);
   var yPix = function(v){ var t = norm(v, lim[0], lim[1]); return isNaN(t) ? NaN : R.y + (1 - t) * R.h; };
-  var N = axis.order.length, xs = [axis.ghostLeftPix()], ys = [values[axis.order[N - 1]]];
-  for (var slot = 0; slot < N; slot++) { var dc = axis.order[slot]; xs.push((axis.leftPix(dc) + axis.rightPix(dc)) / 2); ys.push(values[dc]); }
-  xs.push(axis.ghostRightPix()); ys.push(values[axis.order[0]]);
-  drawProfilePathXY(ctx, R, xs, ys, yPix);
+  // Uncertainty overlays first, so the main line sits on top of them.
+  if (uncArrays) drawUncertaintyOverlaysTop(ctx, R, uncArrays, axis, yPix);
+  var pts = topProfilePoints(values, axis);
+  drawProfilePathXY(ctx, R, pts.xs, pts.ys, yPix);
   ctx.textAlign='right'; ctx.textBaseline='middle';
   [0,0.5,1].forEach(function(f){ var yy=R.y+(1-f)*R.h; ctx.beginPath();ctx.moveTo(R.x-3,yy);ctx.lineTo(R.x,yy);ctx.stroke();ctx.fillText(fmtNum(valueAtFrac(lim,f)),R.x-5,yy); });
   ctx.save(); ctx.translate(11,R.y+R.h/2); ctx.rotate(-Math.PI/2); ctx.textBaseline='middle'; ctx.font='9px sans-serif'; drawLabelWithSup(ctx, varLabel(), 0, 0, 'center'); ctx.restore();
 }
-function drawSideProfile(ctx, R, values, yCenter, lim, isDepthProfile, selIdx, yEdgePix, nRows) {
+function drawSideProfile(ctx, R, values, yCenter, lim, isDepthProfile, selIdx, yEdgePix, nRows, uncArrays) {
   frame(ctx, R); axisStyle(ctx);
   if (selIdx) drawSideSelBox(ctx, R, selIdx, yEdgePix, nRows);
   var xPix = function(v){ var t = norm(v, lim[0], lim[1]); return isNaN(t) ? NaN : R.x + t * R.w; };
-  // Draw the Martin curve first so it sits behind the data line.
+  // Draw the Martin curve and uncertainty overlays first so they sit behind the data line.
   if (isDepthProfile && S.varName === 'flux_POC' && S.secDepthArr) drawMartinCurve(ctx, R, S.secDepthArr, S.model, yCenter, lim, xPix);
+  if (uncArrays) {
+    UNC_SUFFIXES.forEach(function (suf) {
+      var arr = uncArrays[suf]; if (!arr) return;
+      var st = UNC_STYLE[suf];
+      drawSideProfilePathStyled(ctx, R, arr, yCenter, xPix, { color: profileLineColor(), width: st.width, dash: st.dash });
+    });
+  }
   ctx.save(); ctx.beginPath(); ctx.rect(R.x,R.y,R.w,R.h); ctx.clip();
   ctx.beginPath(); ctx.strokeStyle=profileLineColor(); ctx.lineWidth=2; ctx.lineJoin='round';
   var started=false;
@@ -1151,8 +1294,8 @@ function drawSection(sharedH) {
   drawColorbar(ctx, cssW, R, varLabel(), S.secLim);
   if (S.secProfiles) {
     var rcTD = GVCore.selRowsCols(S.boxTD.set, nM);
-    drawTopProfile(ctx, parts.top, S.secMonthArr, monthAxis, S.secMonthLim, rcTD.cols);
-    drawSideProfile(ctx, parts.side, S.secDepthArr, function(i){ return (yEdgePix(i)+yEdgePix(i+1))/2; }, S.secDepthLim, true, rcTD.rows, yEdgePix, nP);
+    drawTopProfile(ctx, parts.top, S.secMonthArr, monthAxis, S.secMonthLim, rcTD.cols, uncOverlayArrays(S.secUnc, 'monthArr'));
+    drawSideProfile(ctx, parts.side, S.secDepthArr, function(i){ return (yEdgePix(i)+yEdgePix(i+1))/2; }, S.secDepthLim, true, rcTD.rows, yEdgePix, nP, uncOverlayArrays(S.secUnc, 'depthArr'));
     drawPanelLabel(ctx, parts.top.x, parts.top.y, 'mean ' + depthRunsLabel(rcTD.rows));
     drawPanelLabel(ctx, parts.side.x, parts.side.y, 'mean ' + monthRunsLabel(rcTD.cols));
   }
@@ -1189,8 +1332,8 @@ function drawMap(sharedH) {
   drawColorbar(ctx, cssW, R, varLabel(), S.mapLim);
   if (S.mapProfiles) {
     var rcLL = GVCore.selRowsCols(S.boxLL.set, nX);
-    drawTopProfile(ctx, parts.top, S.mapLonArr, lonAxis, S.mapLonLim, rcLL.cols);
-    drawSideProfile(ctx, parts.side, S.mapLatArr, function(i){ return (yEdgePix(i)+yEdgePix(i+1))/2; }, S.mapLatLim, false, rcLL.rows, yEdgePix, nY);
+    drawTopProfile(ctx, parts.top, S.mapLonArr, lonAxis, S.mapLonLim, rcLL.cols, uncOverlayArrays(S.mapUnc, 'lonArr'));
+    drawSideProfile(ctx, parts.side, S.mapLatArr, function(i){ return (yEdgePix(i)+yEdgePix(i+1))/2; }, S.mapLatLim, false, rcLL.rows, yEdgePix, nY, uncOverlayArrays(S.mapUnc, 'latArr'));
     drawPanelLabel(ctx, parts.top.x, parts.top.y, 'mean ' + edgeRunsLabel(rcLL.rows, m.coords.latEdges, fmtLat));
     drawPanelLabel(ctx, parts.side.x, parts.side.y, 'mean ' + edgeRunsLabel(rcLL.cols, m.coords.lonEdges, fmtLon));
   }

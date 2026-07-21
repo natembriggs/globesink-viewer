@@ -32,7 +32,14 @@ selection stays on each panel as a thin magenta rectangle.
   plots. The section gains an all-month selected-depth mean above and an
   all-depth selected-month mean to its right; the map gains analogous longitude
   and latitude profiles. For discontiguous selections, each profile uses the
-  union of every selected row or column across the full retained axis.
+  union of every selected row or column across the full retained axis. When the
+  fuller published dataset is loaded and the selected variable has companion
+  `<var>_precision_lower/upper` and/or `<var>_systematic_uncertainty_lower/upper`
+  variables, those are overlaid on the same profile in its own colour —
+  precision as a dashed line, systematic uncertainty as a thin solid line
+  (each reduced with the same selection, weighting and missing-value policy as
+  the main profile). A note under the variable dropdown says when these are
+  available.
 - **Optional extra panels:** two more heatmaps below the main two — latitude ×
   depth (left) and month × latitude (right) — at full size, without shrinking
   the main panels. They keep depth+latitude (or month+latitude) as full axes

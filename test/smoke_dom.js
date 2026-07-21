@@ -118,6 +118,44 @@ try {
   chk('n_bbp marginal recompute ok', S.secMonthArr.length === S.model.sizes.month &&
     S.mapLatArr.length === S.model.sizes.lat && S.secMonthArr.some(function(v){return isFinite(v);}));
   S.weightMode = 'physical'; recomputeAll();
+
+  // ---- precision / systematic-uncertainty companion-variable overlays ----
+  // The fuller published dataset can carry "<var>_precision_lower/upper" and
+  // "<var>_systematic_uncertainty_lower/upper" siblings (not additive deltas —
+  // absolute bounds); this fixture doesn't have any, so synthesize them for
+  // POC_flux by perturbing its own data, and check the viewer detects and
+  // reduces them the same way as the main variable.
+  (function () {
+    var base = S.model.vars['POC_flux'], n = base.data.length;
+    ['precision_lower', 'precision_upper', 'systematic_uncertainty_lower', 'systematic_uncertainty_upper'].forEach(function (suf, k) {
+      var name = 'POC_flux_' + suf, data = new Float32Array(n);
+      for (var i = 0; i < n; i++) data[i] = isNaN(base.data[i]) ? NaN : base.data[i] * (1 + 0.05 * (k + 1));
+      S.model.vars[name] = { name: name, data: data, units: base.units, long_name: name, attrs: {} };
+      S.model.varNames.push(name);
+    });
+    S.varName = 'POC_flux'; S.secProfiles = true; S.mapProfiles = true; recomputeAll();
+    var uncKeys = Object.keys(S.uncVars).sort();
+    chk('uncertainty companions detected for POC_flux', uncKeys.join(',') === 'precision_lower,precision_upper,systematic_uncertainty_lower,systematic_uncertainty_upper');
+    chk('section uncertainty profiles sized like the main profile', S.secUnc.precision_lower.depthArr.length === S.secDepthArr.length &&
+      S.secUnc.systematic_uncertainty_upper.monthArr.length === S.secMonthArr.length);
+    chk('map uncertainty profiles sized like the main profile', S.mapUnc.precision_upper.lonArr.length === S.mapLonArr.length &&
+      S.mapUnc.systematic_uncertainty_lower.latArr.length === S.mapLatArr.length);
+    chk('systematic-upper overlay exceeds the main profile (larger perturbation)', S.secDepthArr.some(function (v, i) {
+      return isFinite(v) && isFinite(S.secUnc.systematic_uncertainty_upper.depthArr[i]) && S.secUnc.systematic_uncertainty_upper.depthArr[i] > v;
+    }));
+    // (checked on the month axis, not the depth axis: the depth profile
+    // deliberately masks rows shallower than the section's own depth
+    // selection out of the shared-range calc — see maskShallowProfile — so
+    // comparing there would conflate that unrelated behaviour with this one)
+    chk('shared colour range stretches to cover the overlay lines', S.secMonthLim[1] >= Math.max.apply(null,
+      Array.prototype.filter.call(S.secUnc.systematic_uncertainty_upper.monthArr, isFinite)));
+    G.draw();  // exercise the dashed-precision / thin-systematic overlay drawing paths without throwing
+    // Switching to a variable with no companions clears the overlays.
+    S.varName = 'n_bbp'; recomputeAll();
+    chk('uncertainty companions absent for a plain variable', Object.keys(S.uncVars).length === 0 &&
+      Object.keys(S.secUnc).length === 0 && Object.keys(S.mapUnc).length === 0);
+  })();
+
   // extra panels below the main two: lat x depth and month x lat, averaged
   // over the ranges currently selected on the main panels
   S.extraPanels = true; recomputeAll();
