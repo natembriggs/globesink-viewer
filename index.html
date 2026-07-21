@@ -24,7 +24,6 @@
   .cond { display:flex; gap:6px; align-items:center; margin-bottom:5px; flex-wrap:wrap; }
   .cond .x { border-color:#e0a0c0; color:var(--accent); }
   #plots, #plots2 { display:flex; flex-wrap:wrap; gap:6px; padding:10px; }
-  #depthLatCanvas, #latMonthCanvas { cursor:default; }
   .panelwrap { flex:1 1 460px; min-width:340px; border:1px solid transparent; border-radius:6px; padding:4px; }
   .panelwrap.focused { border-color:var(--accent); }
   .panelwrap h3 { margin:0 0 4px; font-size:13px; font-weight:600; text-align:center; }
@@ -133,12 +132,12 @@
   <div class="panelwrap">
     <h3 id="depthLatTitle">lat × depth</h3>
     <canvas id="depthLatCanvas"></canvas>
-    <div class="hint" style="text-align:center">Averaged over the longitude range selected on the map and the month range selected on the section, above. No selection here.</div>
+    <div class="hint" style="text-align:center">Averaged over the longitude range selected on the map and the month range selected on the section, above. Click/drag to select a latitude × depth range; all panels stay in sync.</div>
   </div>
   <div class="panelwrap">
     <h3 id="latMonthTitle">month × lat</h3>
     <canvas id="latMonthCanvas"></canvas>
-    <div class="hint" style="text-align:center">Averaged over the depth range selected on the section and the longitude range selected on the map, above. No selection here. Drag the month labels below to pan (linked with the section panel).</div>
+    <div class="hint" style="text-align:center">Averaged over the depth range selected on the section and the longitude range selected on the map, above. Click/drag to select a month × latitude range; all panels stay in sync. Drag the month labels below to pan (linked with the section panel).</div>
   </div>
 </div>
 
@@ -198,6 +197,11 @@ var S = {
   lonOffset: 0,    // data-lon index shown at the left edge of the map panel (drag its bottom axis to pan)
   boxLL: null,  // {set,anchor,active} lat/lon cells (row=lat,col=lon) -> drives section; drawn on map
   boxTD: null,  // {set,anchor,active} depth/month cells (row=depth,col=month) -> drives map; drawn on section
+  // Interaction anchors for the two extra panels' cross-box selections. The
+  // selection itself always lives in boxLL/boxTD (the extra panels pair one
+  // axis from each), so these only remember the drag/extend origin.
+  dlAnchor: null, dlActive: null,   // depthLat panel: [depthRow, latCol]
+  lmAnchor: null, lmActive: null,   // latMonth panel: [latRow, monthCol]
   focus: null,  // 'section' | 'map' — last-clicked plot; receives arrow keys
   conditions: [], keep: null,
   secArr: null, mapArr: null, secWeight: null, mapWeight: null,
@@ -328,6 +332,9 @@ function loadModelFromBuffer(ab, name, source) {
     S.lonOffset = carriedLonOffset != null ? carriedLonOffset : 0;
     S.boxLL = carriedLL || { anchor: [0, 0], active: [nY - 1, nX - 1], set: GVCore.selRectSet([0, 0], [nY - 1, nX - 1], nX) };
     S.boxTD = carriedTD || { anchor: [d1, 0], active: [d1, nM - 1], set: GVCore.selRectSet([d1, 0], [d1, nM - 1], nM) };
+    // extra-panel interaction anchors are just drag origins — drop them on load
+    // (they default to the current selection's corner when next needed)
+    S.dlAnchor = S.dlActive = S.lmAnchor = S.lmActive = null;
     rebuildCondVarOptions();
     recomputeKeep();
     recomputeAll();
@@ -1193,8 +1200,69 @@ function drawMap(sharedH) {
   mapGeom = { R:R, cv:cv, colAxis: lonAxis, lat0:lat0, lat1:lat1 };
 }
 
-// ----- extra panel (bottom-left): x=lat, y=depth. No pan, no selection —
-// purely a read-out of what's currently selected on the two main panels. -----
+// ---------- cross-box selection for the two extra panels ----------
+// The extra panels each show one axis from boxLL (lat) and one from boxTD
+// (depth or month). There is no place to store a correlation *between* those
+// two boxes, so a selection made on an extra panel can only be held as the
+// product of its two axes' index sets — which is exactly the "bounding box
+// where there's ambiguity" rule. `productSet`/`productBox` build that product;
+// `bboxRange` collapses a dimension not visible on the panel being edited to
+// its contiguous [min..max] span (so a prior ctrl-selection along it jumps to
+// the bounding box rather than silently constraining the new selection).
+function productSet(rows, cols, NC) {
+  var s = {};
+  for (var i = 0; i < rows.length; i++) for (var j = 0; j < cols.length; j++) s[rows[i] * NC + cols[j]] = 1;
+  return s;
+}
+function productBox(rows, cols, NC) {
+  return { set: productSet(rows, cols, NC), anchor: [rows[0], cols[0]], active: [rows[rows.length - 1], cols[cols.length - 1]] };
+}
+function bboxRange(idx) {
+  if (!idx.length) return [];
+  var lo = idx[0], hi = idx[0];
+  for (var i = 1; i < idx.length; i++) { if (idx[i] < lo) lo = idx[i]; if (idx[i] > hi) hi = idx[i]; }
+  return GVCore.idxRange(lo, hi);
+}
+// depthLat panel: rows = depth (from boxTD), cols = lat (from boxLL). The box
+// is reconstructed from the current master projections each time so it always
+// reflects edits made on any other panel; the drag origin persists in S.dl*.
+function depthLatBox() {
+  var nY = S.model.sizes.lat, nM = S.model.sizes.month, nX = S.model.sizes.lon;
+  var depth = GVCore.selRowsCols(S.boxTD.set, nM).rows, lat = GVCore.selRowsCols(S.boxLL.set, nX).rows;
+  return { set: productSet(depth, lat, nY),
+    anchor: S.dlAnchor || [depth[0], lat[0]], active: S.dlActive || [depth[depth.length - 1], lat[lat.length - 1]] };
+}
+// Write a depthLat selection back into the masters: its depth rows drive
+// boxTD, its lat cols drive boxLL, and the two unseen dims (month, lon)
+// collapse to their bounding boxes — overriding any ctrl-selection along them.
+function commitDepthLatBox(box) {
+  var nY = S.model.sizes.lat, nX = S.model.sizes.lon, nM = S.model.sizes.month;
+  var rc = GVCore.selRowsCols(box.set, nY);          // rows = depth, cols = lat
+  var monthBB = bboxRange(GVCore.selRowsCols(S.boxTD.set, nM).cols);
+  var lonBB = bboxRange(GVCore.selRowsCols(S.boxLL.set, nX).cols);
+  S.boxTD = productBox(rc.rows, monthBB, nM);
+  S.boxLL = productBox(rc.cols, lonBB, nX);
+  S.dlAnchor = box.anchor.slice(); S.dlActive = box.active.slice();
+}
+// latMonth panel: rows = lat (from boxLL), cols = month (from boxTD).
+function latMonthBox() {
+  var nM = S.model.sizes.month, nX = S.model.sizes.lon;
+  var lat = GVCore.selRowsCols(S.boxLL.set, nX).rows, month = GVCore.selRowsCols(S.boxTD.set, nM).cols;
+  return { set: productSet(lat, month, nM),
+    anchor: S.lmAnchor || [lat[0], month[0]], active: S.lmActive || [lat[lat.length - 1], month[month.length - 1]] };
+}
+function commitLatMonthBox(box) {
+  var nM = S.model.sizes.month, nX = S.model.sizes.lon;
+  var rc = GVCore.selRowsCols(box.set, nM);          // rows = lat, cols = month
+  var lonBB = bboxRange(GVCore.selRowsCols(S.boxLL.set, nX).cols);
+  var depthBB = bboxRange(GVCore.selRowsCols(S.boxTD.set, nM).rows);
+  S.boxLL = productBox(rc.rows, lonBB, nX);
+  S.boxTD = productBox(depthBB, rc.cols, nM);
+  S.lmAnchor = box.anchor.slice(); S.lmActive = box.active.slice();
+}
+
+// ----- extra panel (bottom-left): x=lat, y=depth. Selectable; the selection
+// lives in the two main boxes (lat in boxLL, depth in boxTD). -----
 var depthLatGeom = null;
 function drawDepthLat(sharedH) {
   var cv = document.getElementById('depthLatCanvas');
@@ -1205,7 +1273,8 @@ function drawDepthLat(sharedH) {
   var dTop = m.coords.depthEdges[0], dBot = m.coords.depthEdges[nP];
   var latAxis = {
     leftPix: function (c) { return R.x + ((latE[c] - lat0) / (lat1 - lat0)) * R.w; },
-    rightPix: function (c) { return R.x + ((latE[c + 1] - lat0) / (lat1 - lat0)) * R.w; }
+    rightPix: function (c) { return R.x + ((latE[c + 1] - lat0) / (lat1 - lat0)) * R.w; },
+    slotOf: function (c) { return c; }   // lat doesn't pan, so slot == data index
   };
   var yEdgePix = function (r) { return R.y + ((m.coords.depthEdges[r] - dTop) / (dBot - dTop)) * R.h; };
   ctx.clearRect(0, 0, cssW, cssH);
@@ -1221,10 +1290,19 @@ function drawDepthLat(sharedH) {
   dticks.forEach(function (dv) { if (dv >= dTop && dv <= dBot) { var yy = R.y + ((dv - dTop) / (dBot - dTop)) * R.h; ctx.beginPath(); ctx.moveTo(R.x - 3, yy); ctx.lineTo(R.x, yy); ctx.stroke(); ctx.fillText(dv, R.x - 6, yy); } });
   ctx.save(); ctx.translate(14, R.y + R.h / 2); ctx.rotate(-Math.PI / 2); ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText('depth (m)', 0, 0); ctx.restore();
   drawColorbar(ctx, cssW, R, varLabel(), S.depthLatLim);
-  depthLatGeom = { R: R, cv: cv };
+  // selection: lat (from the map) × depth (from the section), drawn as the
+  // product of the two projections — the bounding box across the unseen
+  // lon/month dims (see the cross-box selection helpers above).
+  var latSel = GVCore.selRowsCols(S.boxLL.set, m.sizes.lon).rows;
+  var depthSel = GVCore.selRowsCols(S.boxTD.set, m.sizes.month).rows;
+  var selSet = productSet(depthSel, latSel, nY);
+  drawCellSetOutline(ctx, selSet, nY, latAxis, yEdgePix);
+  if (S.dlAnchor && selSet[S.dlAnchor[0] * nY + S.dlAnchor[1]]) drawAnchorCell(ctx, S.dlAnchor, nY, latAxis, yEdgePix);
+  depthLatGeom = { R: R, cv: cv, colAxis: latAxis, lat0: lat0, lat1: lat1 };
 }
 
-// ----- extra panel (bottom-right): x=month, y=lat. No pan, no selection. -----
+// ----- extra panel (bottom-right): x=month, y=lat. Selectable, and its month
+// axis is pannable + linked with the section panel. -----
 var latMonthGeom = null;
 function drawLatMonth(sharedH) {
   var cv = document.getElementById('latMonthCanvas');
@@ -1248,7 +1326,14 @@ function drawLatMonth(sharedH) {
   // latitude" obvious, so it needs an explicit axis label.
   ctx.save(); ctx.translate(14, R.y + R.h / 2); ctx.rotate(-Math.PI / 2); ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText('latitude', 0, 0); ctx.restore();
   drawColorbar(ctx, cssW, R, varLabel(), S.latMonthLim);
-  latMonthGeom = { R: R, cv: cv, colAxis: monthAxis };
+  // selection: lat (from the map) × month (from the section), product of the
+  // two projections (bounding box across the unseen lon/depth dims).
+  var latSel = GVCore.selRowsCols(S.boxLL.set, m.sizes.lon).rows;
+  var monthSel = GVCore.selRowsCols(S.boxTD.set, nM).cols;
+  var selSet = productSet(latSel, monthSel, nM);
+  drawCellSetOutline(ctx, selSet, nM, monthAxis, yEdgePix);
+  if (S.lmAnchor && selSet[S.lmAnchor[0] * nM + S.lmAnchor[1]]) drawAnchorCell(ctx, S.lmAnchor, nM, monthAxis, yEdgePix);
+  latMonthGeom = { R: R, cv: cv, colAxis: monthAxis, lat0: lat0, lat1: lat1 };
 }
 
 function varLabel(){ var v=S.model.vars[S.varName]; return v.name + (v.units?' ('+v.units+')':'') + (S.log?' [log]':''); }
@@ -1337,6 +1422,22 @@ function mapPixelToCell(px, py, g){
   var latVal = g.lat0 + (1 - (py - g.R.y) / g.R.h) * (g.lat1 - g.lat0);
   return [GVCore.cellIndexForValue(c.latEdges, latVal), lonCol];
 }
+// depthLat panel: x = latitude (south→north, left→right), y = depth (down).
+// Returns [depthRow, latCol].
+function depthLatPixelToCell(px, py, g){
+  var c = S.model.coords, nP = S.model.sizes.depth;
+  var latVal = g.lat0 + ((px - g.R.x) / g.R.w) * (g.lat1 - g.lat0);
+  var depthVal = c.depthEdges[0] + ((py - g.R.y) / g.R.h) * (c.depthEdges[nP] - c.depthEdges[0]);
+  return [GVCore.cellIndexForValue(c.depthEdges, depthVal), GVCore.cellIndexForValue(c.latEdges, latVal)];
+}
+// latMonth panel: x = month (pannable colAxis), y = latitude (up). Returns
+// [latRow, monthCol].
+function latMonthPixelToCell(px, py, g){
+  var c = S.model.coords;
+  var monthCol = axisPixelToDataCol(g.colAxis, px);
+  var latVal = g.lat0 + (1 - (py - g.R.y) / g.R.h) * (g.lat1 - g.lat0);
+  return [GVCore.cellIndexForValue(c.latEdges, latVal), monthCol];
+}
 
 // throttle live recompute during a drag to one per animation frame
 var _recPending = false;
@@ -1346,29 +1447,35 @@ function scheduleRecompute(){
   raf(function(){ _recPending = false; recomputeAll(); });
 }
 
+// P.getBox() returns the box to edit; P.commit(box) writes it back. For the
+// two main panels the box IS the master (mutated in place) and commit is a
+// no-op; for the extra panels the box is reconstructed from the masters and
+// commit decomposes it back into boxLL/boxTD (see commitDepthLatBox etc.).
 function panelMouseDown(ev, P){
   var g = P.getGeom(); if (!g) return;
   var p = relpos(ev, g.cv);
   if (p.x < g.R.x || p.x > g.R.x + g.R.w || p.y < g.R.y || p.y > g.R.y + g.R.h) return;
-  setFocus(P.focus);
-  var box = S[P.boxKey], NC = P.NC(), cell = P.pixelToCell(p.x, p.y, g);
+  setFocus(P.focus || null);
+  var box = P.getBox(), NC = P.NC(), cell = P.pixelToCell(p.x, p.y, g);
   ev.preventDefault();
   var ctrl = ev.metaKey || ev.ctrlKey;
   GVCore.selClick(box, cell, NC, ev.shiftKey, ctrl, g.colAxis.order);
+  P.commit(box);
   P.dragging = !ctrl;   // ctrl+click is a one-cell toggle, not a drag
   recomputeAll();
 }
 function panelMouseMove(ev, P){
   if (!P.dragging) return;
   var g = P.getGeom(); if (!g) return;
-  var p = relpos(ev, g.cv), box = S[P.boxKey];
+  var p = relpos(ev, g.cv), box = P.getBox(), NC = P.NC();
   var cell = P.pixelToCell(clamp(p.x, g.R.x, g.R.x + g.R.w), clamp(p.y, g.R.y, g.R.y + g.R.h), g);
   if (cell[0] === box.active[0] && cell[1] === box.active[1]) return;   // still same cell
   box.active = cell.slice();                                            // extend rect from anchor
   // Screen-order (not raw data-index) span between anchor and active — see
   // selRectSet's colOrder doc: a drag's "between" is what's between the two
   // points on screen, which isn't the same thing once the axis is panned.
-  box.set = GVCore.selRectSet(box.anchor, box.active, P.NC(), g.colAxis.order);
+  box.set = GVCore.selRectSet(box.anchor, box.active, NC, g.colAxis.order);
+  P.commit(box);
   scheduleRecompute();
 }
 
@@ -1405,27 +1512,36 @@ function panelAxisHover(ev, P) {
   g.cv.style.cursor = over ? 'ew-resize' : (P.elseCursor || 'crosshair');
 }
 
+var _noop = function(){};
 function initInteraction() {
   var secCv = document.getElementById('secCanvas'), mapCv = document.getElementById('mapCanvas');
-  var secP = { focus:'section', boxKey:'boxTD', offsetKey:'monthOffset', getGeom:function(){ return secGeom; }, pixelToCell:secPixelToCell,
-    NC:function(){ return S.model.sizes.month; }, dragging:false, panDragging:false };
-  var mapP = { focus:'map', boxKey:'boxLL', offsetKey:'lonOffset', getGeom:function(){ return mapGeom; }, pixelToCell:mapPixelToCell,
-    NC:function(){ return S.model.sizes.lon; }, dragging:false, panDragging:false };
-  // The extra month x lat panel has no selection of its own, but its month
-  // axis is pannable — sharing S.monthOffset with secP is what keeps the two
-  // linked, since dragging either one just writes the same state field.
-  var latMonthCv = document.getElementById('latMonthCanvas');
-  var latMonthP = { offsetKey:'monthOffset', getGeom:function(){ return latMonthGeom; },
-    NC:function(){ return S.model.sizes.month; }, panDragging:false, elseCursor:'default' };
+  // The two main panels edit their master box in place (commit is a no-op).
+  var secP = { focus:'section', offsetKey:'monthOffset', getGeom:function(){ return secGeom; }, pixelToCell:secPixelToCell,
+    NC:function(){ return S.model.sizes.month; }, getBox:function(){ return S.boxTD; }, commit:_noop, dragging:false, panDragging:false };
+  var mapP = { focus:'map', offsetKey:'lonOffset', getGeom:function(){ return mapGeom; }, pixelToCell:mapPixelToCell,
+    NC:function(){ return S.model.sizes.lon; }, getBox:function(){ return S.boxLL; }, commit:_noop, dragging:false, panDragging:false };
+  // The two extra panels are selectable too, but a selection there spans both
+  // master boxes (one axis each), so getBox reconstructs a box from the master
+  // projections and commit decomposes it back. The latMonth month axis is also
+  // pannable and shares S.monthOffset with the section panel (so they stay
+  // linked); depthLat has no pannable axis.
+  var depthLatCv = document.getElementById('depthLatCanvas'), latMonthCv = document.getElementById('latMonthCanvas');
+  var depthLatP = { getGeom:function(){ return depthLatGeom; }, pixelToCell:depthLatPixelToCell,
+    NC:function(){ return S.model.sizes.lat; }, getBox:depthLatBox, commit:commitDepthLatBox, dragging:false };
+  var latMonthP = { offsetKey:'monthOffset', getGeom:function(){ return latMonthGeom; }, pixelToCell:latMonthPixelToCell,
+    NC:function(){ return S.model.sizes.month; }, getBox:latMonthBox, commit:commitLatMonthBox, dragging:false, panDragging:false };
   secCv.addEventListener('mousedown', function(e){ panelAxisMouseDown(e, secP); panelMouseDown(e, secP); });
   mapCv.addEventListener('mousedown', function(e){ panelAxisMouseDown(e, mapP); panelMouseDown(e, mapP); });
-  latMonthCv.addEventListener('mousedown', function(e){ panelAxisMouseDown(e, latMonthP); });
+  depthLatCv.addEventListener('mousedown', function(e){ panelMouseDown(e, depthLatP); });
+  latMonthCv.addEventListener('mousedown', function(e){ panelAxisMouseDown(e, latMonthP); panelMouseDown(e, latMonthP); });
   secCv.addEventListener('mousemove', function(e){ panelAxisHover(e, secP); });
   mapCv.addEventListener('mousemove', function(e){ panelAxisHover(e, mapP); });
   latMonthCv.addEventListener('mousemove', function(e){ panelAxisHover(e, latMonthP); });
   document.addEventListener('mousemove', function(e){ panelMouseMove(e, secP); panelMouseMove(e, mapP);
+    panelMouseMove(e, depthLatP); panelMouseMove(e, latMonthP);
     panelAxisMouseMove(e, secP); panelAxisMouseMove(e, mapP); panelAxisMouseMove(e, latMonthP); });
   document.addEventListener('mouseup', function(){ secP.dragging = false; mapP.dragging = false;
+    depthLatP.dragging = false; latMonthP.dragging = false;
     secP.panDragging = false; mapP.panDragging = false; latMonthP.panDragging = false; });
   // clicking anywhere in a panel (title, padding) switches focus without editing
   secCv.parentElement.addEventListener('mousedown', function(){ setFocus('section'); });

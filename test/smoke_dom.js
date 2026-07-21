@@ -80,7 +80,7 @@ try {
   var m = html.match(/<script>([\s\S]*?)<\/script>\s*<\/body>/);
   if (!m) throw new Error('could not extract inline script');
   // strict-mode eval keeps declarations local, so expose what we need to assert on
-  eval(m[1] + '\n;globalThis.__gv = { S: S, recomputeAll: recomputeAll, recomputeKeep: recomputeKeep, loadModelFromBuffer: loadModelFromBuffer, loadPublished: loadPublished, panelRects: panelRects, landLoaded: function(){ return LAND != null; }, land: function(){ return LAND; }, csvSectionGrid: csvSectionGrid, csvMapLong: csvMapLong, jsonExport: jsonExport, draw: draw, buildRotatedAxis: buildRotatedAxis, axisPixelToDataCol: axisPixelToDataCol, wrapMod: wrapMod, secGeom: function(){ return secGeom; }, latMonthGeom: function(){ return latMonthGeom; } };');
+  eval(m[1] + '\n;globalThis.__gv = { S: S, recomputeAll: recomputeAll, recomputeKeep: recomputeKeep, loadModelFromBuffer: loadModelFromBuffer, loadPublished: loadPublished, panelRects: panelRects, landLoaded: function(){ return LAND != null; }, land: function(){ return LAND; }, csvSectionGrid: csvSectionGrid, csvMapLong: csvMapLong, jsonExport: jsonExport, draw: draw, buildRotatedAxis: buildRotatedAxis, axisPixelToDataCol: axisPixelToDataCol, wrapMod: wrapMod, secGeom: function(){ return secGeom; }, latMonthGeom: function(){ return latMonthGeom; }, depthLatGeom: function(){ return depthLatGeom; }, depthLatBox: depthLatBox, commitDepthLatBox: commitDepthLatBox, latMonthBox: latMonthBox, commitLatMonthBox: commitLatMonthBox, productSet: productSet, bboxRange: bboxRange };');
   var G = globalThis.__gv, S = G.S;
   var recomputeAll = G.recomputeAll, recomputeKeep = G.recomputeKeep;
   // the app now starts blank; drive the file-load path directly
@@ -147,6 +147,47 @@ try {
   S.boxTD.set = {}; S.boxTD.set[1 * nMx0 + 0] = 1; S.boxTD.anchor = [1,0]; S.boxTD.active = [1,0]; recomputeAll();
   chk('depthLat responds to section month selection', !S.depthLatArr.every(function(v,i){ return isNaN(v) ? isNaN(beforeDL[i]) : v === beforeDL[i]; }));
   S.varName = savedVarName;
+
+  // ---- the extra panels are now selectable; a selection there spans both
+  // master boxes, and the two unseen dimensions collapse to their bounding
+  // boxes (overriding any prior ctrl-selection along them) ----
+  (function () {
+    var nY = S.model.sizes.lat, nX = S.model.sizes.lon, nP = S.model.sizes.depth, nM = S.model.sizes.month;
+    // start from a clean full-globe selection
+    S.boxLL = { anchor:[0,0], active:[nY-1,nX-1], set: GVCore.selRectSet([0,0],[nY-1,nX-1], nX) };
+    S.boxTD = { anchor:[0,0], active:[0,nM-1], set: GVCore.selRectSet([0,0],[0,nM-1], nM) };
+    S.dlAnchor = S.dlActive = S.lmAnchor = S.lmActive = null;
+    // drag on depthLat: depth rows 1..3 (y), lat cols 5..10 (x)
+    var box = G.depthLatBox();
+    box.anchor = [1,5]; box.active = [3,10];
+    box.set = GVCore.selRectSet(box.anchor, box.active, nY);
+    G.commitDepthLatBox(box);
+    var depthProj = GVCore.selRowsCols(S.boxTD.set, nM).rows, latProj = GVCore.selRowsCols(S.boxLL.set, nX).rows;
+    chk('depthLat drag sets depth range on boxTD', depthProj.join(',') === '1,2,3');
+    chk('depthLat drag sets lat range on boxLL', latProj.join(',') === '5,6,7,8,9,10');
+    chk('depthLat drag leaves month spanning its bounding box', GVCore.selRowsCols(S.boxTD.set, nM).cols.length === nM);
+    chk('depthLat drag leaves lon spanning its bounding box', GVCore.selRowsCols(S.boxLL.set, nX).cols.length === nX);
+
+    // Now ctrl-select a discontiguous lon on the map (boxLL), then select on
+    // latMonth: lon can't be seen there, so it must jump to its [min..max]
+    // bounding box rather than staying discontiguous.
+    S.boxLL = { anchor:[0,2], active:[nY-1,2], set: {} };
+    [2, 8].forEach(function(lonc){ for (var y = 0; y < nY; y++) S.boxLL.set[y*nX + lonc] = 1; });  // lon {2,8} only
+    chk('precondition: map lon selection is discontiguous', GVCore.runsFromIdx(GVCore.selRowsCols(S.boxLL.set, nX).cols).length === 2);
+    var lmbox = G.latMonthBox();
+    lmbox.anchor = [1,3]; lmbox.active = [4,6];    // lat rows 1..4, month cols 3..6
+    lmbox.set = GVCore.selRectSet(lmbox.anchor, lmbox.active, nM);
+    G.commitLatMonthBox(lmbox);
+    chk('latMonth drag sets lat range on boxLL', GVCore.selRowsCols(S.boxLL.set, nX).rows.join(',') === '1,2,3,4');
+    chk('latMonth drag sets month range on boxTD', GVCore.selRowsCols(S.boxTD.set, nM).cols.join(',') === '3,4,5,6');
+    var lonAfter = GVCore.selRowsCols(S.boxLL.set, nX).cols;
+    chk('override collapses discontiguous lon to its bounding box', GVCore.runsFromIdx(lonAfter).length === 1 && lonAfter[0] === 2 && lonAfter[lonAfter.length-1] === 8);
+    // restore a clean default for the checks that follow
+    S.boxLL = { anchor:[0,0], active:[nY-1,nX-1], set: GVCore.selRectSet([0,0],[nY-1,nX-1], nX) };
+    S.boxTD = { anchor:[0,0], active:[0,nM-1], set: GVCore.selRectSet([0,0],[0,nM-1], nM) };
+    recomputeAll(); G.draw();   // exercise the selection-drawing paths on both extra panels
+  })();
+
   S.extraPanels = false; recomputeAll();
   chk('extra panels cleared when disabled', S.depthLatArr === null && S.latMonthArr === null);
   var pr = G.panelRects({x:10,y:20,w:300,h:180}, true);

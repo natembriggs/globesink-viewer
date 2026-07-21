@@ -35,12 +35,18 @@ selection stays on each panel as a thin magenta rectangle.
   union of every selected row or column across the full retained axis.
 - **Optional extra panels:** two more heatmaps below the main two — latitude ×
   depth (left) and month × latitude (right) — at full size, without shrinking
-  the main panels. They have no selection of their own; instead they keep
-  depth+latitude (or month+latitude) as full axes and average over the other
-  two dimensions using whatever ranges are currently selected on the section
-  and map above, so they update live as those selections change. The month ×
-  latitude panel's month axis is pannable, same as the section panel's, and
-  the two are linked — dragging either one pans both together.
+  the main panels. They keep depth+latitude (or month+latitude) as full axes
+  and average over the other two dimensions using whatever ranges are currently
+  selected on the section and map above, so they update live as those
+  selections change. They are also **selectable** like the main panels
+  (click/drag/shift/ctrl): a selection there spans one axis of each main box
+  (e.g. lat×depth touches the map's latitude and the section's depth), and all
+  four panels stay in sync. Because there is nowhere to store a correlation
+  *between* the two main boxes, a dimension not shown on the panel being edited
+  jumps to its bounding box — so selecting there overrides any earlier
+  ctrl-selection along that unseen dimension. The month × latitude panel's
+  month axis is pannable, same as the section panel's, and the two are linked —
+  dragging either one pans both together.
 - **Log / linear** colour scale.
 - **Missing-value policy:** *ignore in mean* (nan-mean) or *missing if any*
   (the average is blank if any contributing cell is missing).
@@ -175,7 +181,7 @@ collapses (including the discontiguous-selection union rule), the extra-panel
 conditions — against `numpy` values or hand-derived cases — and (2) runs the
 full `index.html` wiring (including all four marginal profiles, both extra
 panels, both weighting modes, and linked/unlinked scales) against a stubbed
-DOM/Canvas to catch runtime errors. Currently 69 core checks + 76 wiring
+DOM/Canvas to catch runtime errors. Currently 69 core checks + 84 wiring
 checks, all passing. Rendering itself (pixels, drag interactions, visual
 alignment of the marginal/extra panels) can only be verified in a real browser.
 
