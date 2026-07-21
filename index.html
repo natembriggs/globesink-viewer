@@ -217,11 +217,59 @@ function updateVarDesc(){
   el.textContent = (desc && desc !== S.varName) ? capitalize(desc) : '';
 }
 
+// ---------- carrying the current view across a dataset switch ----------
+// Loading a different file (e.g. switching smoothed <-> raw climatology)
+// used to always reset the variable and selections to the whole-globe /
+// annual-mean default. To instead preserve "the exact same view", a
+// selection's row/col *indices* aren't reusable as-is if the new file has a
+// different resolution — so it's translated through physical values instead:
+// each contiguous run of selected rows/cols becomes a [lo,hi] value range
+// (in the old grid's own coordinate edges), and that range is then re-applied
+// to the new grid's edges to find the equivalent indices there.
+function selRunsToValueRanges(idxList, edges) {
+  return GVCore.runsFromIdx(idxList).map(function (r) {
+    var lo = edges[r[0]], hi = edges[r[1] + 1];
+    // Nudge a hair inward so a boundary that happens to land exactly on a
+    // shared bin edge (common — e.g. smoothed/raw GLOBESINK files share the
+    // same fixed depth bins) resolves unambiguously to the intended bin
+    // rather than tying with its neighbour (cellIndexForValue treats an
+    // exact edge match as belonging to the lower bin).
+    var eps = (hi - lo) * 1e-6 || 1e-9;
+    return [lo + eps, hi - eps];
+  });
+}
+function valueRangesToIdx(ranges, edges) {
+  var seen = {};
+  ranges.forEach(function (rng) {
+    var r = GVCore.cellRange(edges, rng[0], rng[1]);
+    for (var i = r[0]; i <= r[1]; i++) seen[i] = 1;
+  });
+  return Object.keys(seen).map(Number).sort(function (a, b) { return a - b; });
+}
+// Rebuild a selection box on the new grid from the old one's row/col value
+// ranges, as the Cartesian product of the remapped row and column indices —
+// the same simplification the marginal-profile "union" logic already makes
+// for any selection. Exact for the common case (a plain drag, or the
+// full-grid default); a bounding-box approximation for a discontiguous
+// ctrl-click selection.
+function remapBox(rowRanges, colRanges, rowEdges, colEdges, NC) {
+  var rows = valueRangesToIdx(rowRanges, rowEdges), cols = valueRangesToIdx(colRanges, colEdges);
+  if (!rows.length || !cols.length) return null;
+  var set = {};
+  rows.forEach(function (r) { cols.forEach(function (c) { set[r * NC + c] = 1; }); });
+  return { set: set, anchor: [rows[0], cols[0]], active: [rows[rows.length - 1], cols[cols.length - 1]] };
+}
+
 // ---------- data loading ----------
 function loadModelFromBuffer(ab, name, source) {
   try {
     var model = GVCore.parseNetCDF(ab, name);
     model.source = source || name;
+    // Capture the view (variable + selections) before it's overwritten, so a
+    // dataset switch (e.g. smoothed <-> raw climatology) can carry it over
+    // instead of resetting to the whole-globe / annual-mean default.
+    var prevModel = S.model, prevVarName = S.varName, prevBoxLL = S.boxLL, prevBoxTD = S.boxTD,
+      prevMonthOffset = S.monthOffset, prevLonOffset = S.lonOffset;
     S.model = model;
     if (!model.varNames.length) { setStatus('No 4-D variables found in ' + name); return; }
     // variable dropdown — core variables first, then the rest; each alphabetical
@@ -244,21 +292,42 @@ function loadModelFromBuffer(ab, name, source) {
     } else {                            // built-in (all core) or no core present
       orderedNames.forEach(function (n) { addOpt(vs, n); });
     }
-    S.varName = model.varNames.indexOf('flux_POC') >= 0 ? 'flux_POC' : orderedNames[0];
+    // Keep the same variable (and its colormap) if the new file still has
+    // it; only fall back to the flux_POC/first-variable default otherwise.
+    if (prevModel && model.varNames.indexOf(prevVarName) >= 0) {
+      S.varName = prevVarName;
+    } else {
+      S.varName = model.varNames.indexOf('flux_POC') >= 0 ? 'flux_POC' : orderedNames[0];
+      S.cmap = defaultCmapFor(S.varName);
+      document.getElementById('cmapSel').value = S.cmap;
+    }
     vs.value = S.varName;
     updateVarDesc();
-    S.cmap = defaultCmapFor(S.varName);
-    document.getElementById('cmapSel').value = S.cmap;
     var nopt = document.getElementById('weightNbbp');
     nopt.disabled = !model.vars.n_bbp;
     if (nopt.disabled && S.weightMode === 'n_bbp') S.weightMode = 'physical';
     document.getElementById('weightSel').value = S.weightMode;
-    // defaults: section = whole globe; map = annual, depth bin index 1 (10-50 m)
     var nY = model.sizes.lat, nX = model.sizes.lon, nP = model.sizes.depth, nM = model.sizes.month;
     var d1 = Math.min(1, nP - 1);
-    S.monthOffset = 0; S.lonOffset = 0;
-    S.boxLL = { anchor: [0, 0], active: [nY - 1, nX - 1], set: GVCore.selRectSet([0, 0], [nY - 1, nX - 1], nX) };
-    S.boxTD = { anchor: [d1, 0], active: [d1, nM - 1], set: GVCore.selRectSet([d1, 0], [d1, nM - 1], nM) };
+    // Re-derive the previous lat/lon and depth/month selections (and pan
+    // offsets) on the new grid via their physical value ranges; fall back to
+    // the whole-globe / annual-mean default on first load or if nothing maps.
+    var carriedLL = null, carriedTD = null, carriedMonthOffset = null, carriedLonOffset = null;
+    if (prevModel) {
+      var oc = prevModel.coords;
+      var rcLL = GVCore.selRowsCols(prevBoxLL.set, prevModel.sizes.lon);
+      var rcTD = GVCore.selRowsCols(prevBoxTD.set, prevModel.sizes.month);
+      carriedLL = remapBox(selRunsToValueRanges(rcLL.rows, oc.latEdges), selRunsToValueRanges(rcLL.cols, oc.lonEdges),
+        model.coords.latEdges, model.coords.lonEdges, nX);
+      carriedTD = remapBox(selRunsToValueRanges(rcTD.rows, oc.depthEdges), selRunsToValueRanges(rcTD.cols, oc.monthEdges),
+        model.coords.depthEdges, model.coords.monthEdges, nM);
+      carriedMonthOffset = GVCore.cellIndexForValue(model.coords.monthEdges, oc.month[prevMonthOffset]);
+      carriedLonOffset = GVCore.cellIndexForValue(model.coords.lonEdges, oc.lon[prevLonOffset]);
+    }
+    S.monthOffset = carriedMonthOffset != null ? carriedMonthOffset : 0;
+    S.lonOffset = carriedLonOffset != null ? carriedLonOffset : 0;
+    S.boxLL = carriedLL || { anchor: [0, 0], active: [nY - 1, nX - 1], set: GVCore.selRectSet([0, 0], [nY - 1, nX - 1], nX) };
+    S.boxTD = carriedTD || { anchor: [d1, 0], active: [d1, nM - 1], set: GVCore.selRectSet([d1, 0], [d1, nM - 1], nM) };
     rebuildCondVarOptions();
     recomputeKeep();
     recomputeAll();

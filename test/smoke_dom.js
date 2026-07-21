@@ -237,6 +237,45 @@ try {
     });
   })();
   S.monthOffset = 0; S.lonOffset = 0; G.draw();
+
+  // ---- carrying the view (variable + selections) across a dataset switch ----
+  // Loading a different file must not reset a chosen variable/box back to the
+  // whole-globe default when the new file still has that variable; the
+  // selection is re-derived via physical values, so this has to survive a
+  // switch to a file at a *different* resolution too (the interpolated
+  // example fixture is 90x180 lat/lon vs the synthetic fixture's 45x45, but
+  // shares the same fixed depth-bin edges).
+  (function () {
+    S.varName = 'POC_flux';
+    var nMold = S.model.sizes.month, nXold = S.model.sizes.lon;
+    S.boxLL = { anchor: [10, 5], active: [20, 15], set: GVCore.selRectSet([10, 5], [20, 15], nXold) };
+    S.boxTD = { anchor: [2, 3], active: [6, 8], set: GVCore.selRectSet([2, 3], [6, 8], nMold) };
+    S.monthOffset = 3; S.lonOffset = 7;
+    var oc = S.model.coords, oldLonVal = oc.lon[7];
+    var rcLLOld = GVCore.selRowsCols(S.boxLL.set, nXold), rcTDOld = GVCore.selRowsCols(S.boxTD.set, nMold);
+    var latLo = oc.latEdges[rcLLOld.rows[0]], latHi = oc.latEdges[rcLLOld.rows[rcLLOld.rows.length - 1] + 1];
+    var lonLo = oc.lonEdges[rcLLOld.cols[0]], lonHi = oc.lonEdges[rcLLOld.cols[rcLLOld.cols.length - 1] + 1];
+    var depthLo = oc.depthEdges[rcTDOld.rows[0]], depthHi = oc.depthEdges[rcTDOld.rows[rcTDOld.rows.length - 1] + 1];
+    var monthColsOld = rcTDOld.cols.join(',');
+
+    var fi = readFile('example_data/globesink_example_interpolated.nc', 'binary');
+    G.loadModelFromBuffer(fi.buffer.slice(fi.byteOffset, fi.byteOffset + fi.byteLength), 'globesink_example_interpolated.nc');
+    chk('carried variable survives a dataset switch', S.varName === 'POC_flux');
+    chk('switched to a different-resolution grid', S.model.sizes.lat === 90 && S.model.sizes.lon === 180);
+
+    var nc = S.model.coords;
+    var rcLLNew = GVCore.selRowsCols(S.boxLL.set, S.model.sizes.lon), rcTDNew = GVCore.selRowsCols(S.boxTD.set, S.model.sizes.month);
+    var newLatLo = nc.latEdges[rcLLNew.rows[0]], newLatHi = nc.latEdges[rcLLNew.rows[rcLLNew.rows.length - 1] + 1];
+    var newLonLo = nc.lonEdges[rcLLNew.cols[0]], newLonHi = nc.lonEdges[rcLLNew.cols[rcLLNew.cols.length - 1] + 1];
+    var newDepthLo = nc.depthEdges[rcTDNew.rows[0]], newDepthHi = nc.depthEdges[rcTDNew.rows[rcTDNew.rows.length - 1] + 1];
+    chk('lat/lon box carried within one old bin width', Math.abs(newLatLo - latLo) <= 4 && Math.abs(newLatHi - latHi) <= 4 &&
+      Math.abs(newLonLo - lonLo) <= 4 && Math.abs(newLonHi - lonHi) <= 4);
+    chk('depth range carried exactly (same depth bins in both fixtures)', Math.abs(newDepthLo - depthLo) < 1e-6 && Math.abs(newDepthHi - depthHi) < 1e-6);
+    chk('month selection carried exactly (same 12-month calendar)', rcTDNew.cols.join(',') === monthColsOld);
+    chk('monthOffset carried exactly (same 12-month calendar)', S.monthOffset === 3);
+    chk('lonOffset carried to the equivalent physical longitude', Math.abs(nc.lon[S.lonOffset] - oldLonVal) <= 4);
+  })();
+
   // published-dataset load path: fetch a repo-hosted file -> parse -> render
   G.loadPublished('data/GLOBESINK_monthly_climatologies_smoothed_interpolated_minimal.nc');
   chk('published dataset loads (8 vars)', S.model && S.model.varNames.length === 8);

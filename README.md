@@ -20,6 +20,11 @@ selection stays on each panel as a thin magenta rectangle.
   smoothed climatology by default and offers a dropdown to switch to the raw
   climatology — both fetched directly from the site, no download step. You can
   also **load your own NetCDF-4 file** from disk with the file picker.
+  Switching datasets carries the current view over rather than resetting it:
+  the chosen variable (if present in the new file) and the lat/lon and
+  depth/month selections are kept, re-derived via their physical value ranges
+  so they still land in the right place even if the new file has a different
+  resolution.
 - **Pick the variable** to visualise from a dropdown.
 - **Linked box-averaging** across the two panels (see above).
 - **Optional marginal panels:** shrink either main heatmap to three-quarters of
@@ -168,7 +173,7 @@ collapses (including the discontiguous-selection union rule), the extra-panel
 conditions — against `numpy` values or hand-derived cases — and (2) runs the
 full `index.html` wiring (including all four marginal profiles, both extra
 panels, both weighting modes, and linked/unlinked scales) against a stubbed
-DOM/Canvas to catch runtime errors. Currently 69 core checks + 66 wiring
+DOM/Canvas to catch runtime errors. Currently 69 core checks + 73 wiring
 checks, all passing. Rendering itself (pixels, drag interactions, visual
 alignment of the marginal/extra panels) can only be verified in a real browser.
 
