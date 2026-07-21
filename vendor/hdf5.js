@@ -4736,6 +4736,25 @@ var hdf5 = (() => {
       return /* @__PURE__ */ new Map([["creationorder", creationorder], ["heapid", buf.slice(offset, offset + 7)]]);
     }
   };
+  // "Type 8: Attribute Name for Indexed Attributes" record, used to enumerate
+  // an object's densely-stored attributes (HDF5 switches an object's
+  // attributes from being stored inline in its header to this fractal-heap +
+  // B-tree v2 layout once the attribute count passes a threshold — this is
+  // untouched valid HDF5, just a storage layout the rest of this file's
+  // attribute reader (DataObjects.get_attributes) didn't previously handle).
+  // Record layout: heap ID (8 bytes) + message flags (1 byte) + [creation
+  // order (4 bytes), only when the b-tree's fixed record size includes it] +
+  // name hash (4 bytes). Only the heap ID is needed here.
+  var BTreeV2AttrNames = class extends BTreeV2 {
+    constructor() {
+      super(...arguments);
+      __publicField(this, "NODE_TYPE", 8);
+    }
+    _parse_record(buf, offset, size) {
+      let heapid = buf.slice(offset, offset + 8);
+      return /* @__PURE__ */ new Map([["heapid", heapid]]);
+    }
+  };
 
   // esm/misc-low-level.js
   var SuperBlock = class {
@@ -4966,6 +4985,9 @@ var hdf5 = (() => {
         data_offset += nbytes;
         nbytes = this._managed_object_length_size;
         let size = _unpack_integer(nbytes, heapid, data_offset);
+        if (offset < 0 || size < 0 || offset + size > this.managed.byteLength) {
+          throw "FractalHeap managed object out of range (offset=" + offset + " size=" + size + ")";
+        }
         return this.managed.slice(offset, offset + size);
       } else if (idtype == 1) {
         throw "tiny objectID not supported in FractalHeap";
@@ -5261,10 +5283,56 @@ var hdf5 = (() => {
       let attr_msgs = this.find_msg_type(ATTRIBUTE_MSG_TYPE);
       for (let msg of attr_msgs) {
         let offset = msg.get("offset_to_message");
-        let [name, value] = this.unpack_attribute(offset);
+        let [name, value] = this.unpack_attribute(this.fh, offset);
         attrs[name] = value;
       }
+      // An object with enough attributes (more than HDF5's compact-storage
+      // threshold — e.g. a variable with a dozen-odd metadata attributes)
+      // stores them densely instead: an Attribute Info message points to a
+      // fractal heap holding each attribute's raw message body, indexed by a
+      // B-tree v2 keyed on name. Same attribute message format either way;
+      // only where the bytes live differs.
+      let info_msgs = this.find_msg_type(ATTRIBUTE_INFO_MSG_TYPE);
+      if (info_msgs.length) {
+        let info = this._decode_attribute_info_msg(this.fh, info_msgs[0].get("offset_to_message"));
+        let heap_address = info.get("heap_address"), name_btree_address = info.get("name_btree_address");
+        if (heap_address != null && name_btree_address != null) {
+          let heap = new FractalHeap(this.fh, heap_address);
+          let btree = new BTreeV2AttrNames(this.fh, name_btree_address);
+          for (let record of btree.iter_records()) {
+            // "Huge" fractal-heap objects (rare — seen here for at least one
+            // dimension-scale's REFERENCE_LIST, whose object-reference array
+            // apparently outgrows "managed" storage once enough variables
+            // share that dimension) aren't implemented by this reader (see
+            // FractalHeap.get_data), same as this file already accepts for
+            // datatypes it can't decode. Skip that one attribute rather than
+            // failing the whole object's attribute read.
+            try {
+              let attr_data = heap.get_data(record.get("heapid"));
+              let [name, value] = this.unpack_attribute(attr_data, 0);
+              attrs[name] = value;
+            } catch (e) {
+              console.log("densely-stored attribute not readable, skipped: " + e);
+            }
+          }
+        }
+      }
       return attrs;
+    }
+    _decode_attribute_info_msg(data, offset) {
+      let [version, flags] = struct.unpack_from("<BB", data, offset);
+      assert(version == 0);
+      offset += 2;
+      if ((flags & 1) > 0) {
+        offset += 2;
+      }
+      let fmt = (flags & 2) > 0 ? ATTR_INFO_MSG2 : ATTR_INFO_MSG1;
+      let attr_info = _unpack_struct_from(fmt, data, offset);
+      let output = /* @__PURE__ */ new Map();
+      for (let [k, v] of attr_info.entries()) {
+        output.set(k, v == UNDEFINED_ADDRESS2 ? null : v);
+      }
+      return output;
     }
     get fillvalue() {
       let msg = this.find_msg_type(FILLVALUE_MSG_TYPE)[0];
@@ -5298,16 +5366,16 @@ var hdf5 = (() => {
       }
       return fillvalue;
     }
-    unpack_attribute(offset) {
-      let version = struct.unpack_from("<B", this.fh, offset)[0];
+    unpack_attribute(buf, offset) {
+      let version = struct.unpack_from("<B", buf, offset)[0];
       var attr_map, padding_multiple;
       if (version == 1) {
-        attr_map = _unpack_struct_from(ATTR_MSG_HEADER_V1, this.fh, offset);
+        attr_map = _unpack_struct_from(ATTR_MSG_HEADER_V1, buf, offset);
         assert(attr_map.get("version") == 1);
         offset += ATTR_MSG_HEADER_V1_SIZE;
         padding_multiple = 8;
       } else if (version == 3) {
-        attr_map = _unpack_struct_from(ATTR_MSG_HEADER_V3, this.fh, offset);
+        attr_map = _unpack_struct_from(ATTR_MSG_HEADER_V3, buf, offset);
         assert(attr_map.get("version") == 3);
         offset += ATTR_MSG_HEADER_V3_SIZE;
         padding_multiple = 1;
@@ -5315,23 +5383,23 @@ var hdf5 = (() => {
         throw "unsupported attribute message version: " + version;
       }
       let name_size = attr_map.get("name_size");
-      let name = struct.unpack_from("<" + name_size.toFixed() + "s", this.fh, offset)[0];
+      let name = struct.unpack_from("<" + name_size.toFixed() + "s", buf, offset)[0];
       name = name.replace(/\x00$/, "");
       offset += _padded_size(name_size, padding_multiple);
       var dtype;
       try {
-        dtype = new DatatypeMessage(this.fh, offset).dtype;
+        dtype = new DatatypeMessage(buf, offset).dtype;
       } catch (e) {
         console.log("Attribute " + name + " type not implemented, set to null.");
         return [name, null];
       }
       offset += _padded_size(attr_map.get("datatype_size"), padding_multiple);
-      let shape = this.determine_data_shape(this.fh, offset);
+      let shape = this.determine_data_shape(buf, offset);
       let items = shape.reduce(function(a, b) {
         return a * b;
       }, 1);
       offset += _padded_size(attr_map.get("dataspace_size"), padding_multiple);
-      var value = this._attr_value(dtype, this.fh, items, offset);
+      var value = this._attr_value(dtype, buf, items, offset);
       if (shape.length == 0) {
         value = value[0];
       } else {
@@ -5834,6 +5902,15 @@ var hdf5 = (() => {
     ["heap_address", "Q"],
     ["name_btree_address", "Q"]
   ]);
+  var ATTR_INFO_MSG1 = /* @__PURE__ */ new Map([
+    ["heap_address", "Q"],
+    ["name_btree_address", "Q"]
+  ]);
+  var ATTR_INFO_MSG2 = /* @__PURE__ */ new Map([
+    ["heap_address", "Q"],
+    ["name_btree_address", "Q"],
+    ["order_btree_address", "Q"]
+  ]);
   var LINK_INFO_MSG2 = /* @__PURE__ */ new Map([
     ["heap_address", "Q"],
     ["name_btree_address", "Q"],
@@ -5867,6 +5944,7 @@ var hdf5 = (() => {
   var DATA_STORAGE_FILTER_PIPELINE_MSG_TYPE = 11;
   var ATTRIBUTE_MSG_TYPE = 12;
   var OBJECT_CONTINUATION_MSG_TYPE = 16;
+  var ATTRIBUTE_INFO_MSG_TYPE = 21;
   var SYMBOL_TABLE_MSG_TYPE = 17;
 
   // esm/high-level.js

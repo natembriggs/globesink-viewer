@@ -42,5 +42,21 @@ for m in range(nM):
 arr[0, 0, 0, 0] = -9999.0
 v[:] = arr
 v.coordinates = 'depth lat lon month'   # deliberately NOT the storage order
+
+# Pile on enough attributes to cross HDF5's compact-attribute-storage limit,
+# reproducing a real bug seen in the full GLOBESINK uncertainty variables:
+# once an object has more attributes than the (default ~8) compact threshold,
+# HDF5 moves them to "dense" storage (a fractal heap indexed by a B-tree v2 on
+# name) instead of storing them inline in the object header. A reader that
+# only knows how to read compact attribute messages silently sees zero
+# attributes on such an object -- losing _FillValue (so raw fill sentinels
+# stop being converted to NaN) and _Netcdf4Coordinates (so lat/lon, which
+# share a length here, can no longer be told apart and get transposed). See
+# vendor/hdf5.js's get_attributes/BTreeV2AttrNames for the fix.
+v.long_name = 'probe variable exercising reversed dims and dense attribute storage'
+v.units = 'probe units'
+v.comment = 'padding attribute to force dense storage'
+for i in range(1, 6):
+    setattr(v, 'extra_attr_%d' % i, 'padding value %d' % i)
 ds.close()
 print('wrote', path, '| stored dims (month,lon,lat,depth) =', (nM, nX, nY, nP))
