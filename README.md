@@ -35,11 +35,12 @@ selection stays on each panel as a thin magenta rectangle.
   union of every selected row or column across the full retained axis. When the
   fuller published dataset is loaded and the selected variable has companion
   `<var>_precision_lower/upper` and/or `<var>_systematic_uncertainty_lower/upper`
-  variables, those are overlaid on the same profile in its own colour —
-  precision as a dashed line, systematic uncertainty as a thin solid line
-  (each reduced with the same selection, weighting and missing-value policy as
-  the main profile). A note under the variable dropdown says when these are
-  available.
+  variables (additive uncertainty magnitudes), they're drawn as **bounds**
+  around the profile — `base − lower` and `base + upper` — in a paler tint of
+  the line colour: precision as a dashed pair, systematic uncertainty as a thin
+  solid pair. The two combine differently under the panel averaging, reflecting
+  their physics (see *Combining uncertainty under averaging* below). A note
+  under the variable dropdown says when these are available.
 - **Optional extra panels:** two more heatmaps below the main two — latitude ×
   depth (left) and month × latitude (right) — at full size, without shrinking
   the main panels. They keep depth+latitude (or month+latitude) as full axes
@@ -178,6 +179,34 @@ section marginals include depth-bin or month-length weights as appropriate;
 physical map marginals include grid-cell area. Under `n_bbp` weighting, the
 effective measurement-count sums from the main reduction are carried into the
 marginal reduction rather than averaging already-normalised cells equally.
+
+### Combining uncertainty under averaging
+
+The precision and systematic-uncertainty companion variables are **additive**
+magnitudes, so a profile's bounds are `base − lower` and `base + upper`. But the
+two terms combine differently when a panel averages many cells, because they are
+physically different:
+
+- **Precision** is random/uncorrelated between cells, so it averages *down*. For
+  a weighted mean `x̄ = Σ wᵢ xᵢ / Σ wᵢ` of independent terms, the error
+  propagates in quadrature:
+  `σ_x̄ = √(Σ wᵢ² σᵢ² / nᵢ) / Σ wᵢ`,
+  where `σᵢ` is the stored (single-measurement) precision and the `1/√nᵢ`
+  (`nᵢ = n_bbp`) accounts for each cell value already being a mean of `nᵢ`
+  measurements. Consequently, under **n_bbp weighting** the combined precision
+  falls like `1/√(Σ nᵢ)` — the pooled sample size, so it drops quickly as more
+  cells are averaged — whereas under **area/depth/month weighting** a single
+  imprecise cell with small `nᵢ` can dominate `Σ wᵢ² σᵢ²/nᵢ`, so the combined
+  precision may fall little. If a file has no `n_bbp`, the stored value is taken
+  as the cell precision (`nᵢ = 1`).
+- **Systematic uncertainty** is correlated between cells, so it does *not*
+  average down: the combined value is the ordinary weighted mean of the cell
+  magnitudes — the same reducer used for the value itself.
+
+Both are computed over the same selection, weighting and missing-value policy as
+the profile they annotate; the quadrature runs in two stages (reduce, then
+marginal) that provably equal one direct quadrature sum over all contributing
+cells (checked in `test/test_core.js`).
 
 ## Tests
 

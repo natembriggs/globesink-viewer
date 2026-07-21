@@ -120,16 +120,17 @@ try {
   S.weightMode = 'physical'; recomputeAll();
 
   // ---- precision / systematic-uncertainty companion-variable overlays ----
-  // The fuller published dataset can carry "<var>_precision_lower/upper" and
-  // "<var>_systematic_uncertainty_lower/upper" siblings (not additive deltas —
-  // absolute bounds); this fixture doesn't have any, so synthesize them for
-  // POC_flux by perturbing its own data, and check the viewer detects and
-  // reduces them the same way as the main variable.
+  // The fuller published dataset carries "<var>_precision_lower/upper" and
+  // "<var>_systematic_uncertainty_lower/upper" siblings: ADDITIVE uncertainty
+  // magnitudes drawn as bounds (base − lower, base + upper). This fixture has
+  // none, so synthesize positive magnitudes for POC_flux and check the viewer
+  // detects them, combines each kind correctly, and draws them additively.
   (function () {
     var base = S.model.vars['POC_flux'], n = base.data.length;
     ['precision_lower', 'precision_upper', 'systematic_uncertainty_lower', 'systematic_uncertainty_upper'].forEach(function (suf, k) {
       var name = 'POC_flux_' + suf, data = new Float32Array(n);
-      for (var i = 0; i < n; i++) data[i] = isNaN(base.data[i]) ? NaN : base.data[i] * (1 + 0.05 * (k + 1));
+      // positive additive magnitude, ~10-25% of the value
+      for (var i = 0; i < n; i++) data[i] = isNaN(base.data[i]) ? NaN : Math.abs(base.data[i]) * (0.10 + 0.05 * k);
       S.model.vars[name] = { name: name, data: data, units: base.units, long_name: name, attrs: {} };
       S.model.varNames.push(name);
     });
@@ -140,14 +141,37 @@ try {
       S.secUnc.systematic_uncertainty_upper.monthArr.length === S.secMonthArr.length);
     chk('map uncertainty profiles sized like the main profile', S.mapUnc.precision_upper.lonArr.length === S.mapLonArr.length &&
       S.mapUnc.systematic_uncertainty_lower.latArr.length === S.mapLatArr.length);
-    chk('systematic-upper overlay exceeds the main profile (larger perturbation)', S.secDepthArr.some(function (v, i) {
-      return isFinite(v) && isFinite(S.secUnc.systematic_uncertainty_upper.depthArr[i]) && S.secUnc.systematic_uncertainty_upper.depthArr[i] > v;
-    }));
-    // (checked on the month axis, not the depth axis: the depth profile
-    // deliberately masks rows shallower than the section's own depth
-    // selection out of the shared-range calc — see maskShallowProfile — so
-    // comparing there would conflate that unrelated behaviour with this one)
-    chk('shared colour range stretches to cover the overlay lines', S.secMonthLim[1] >= Math.max.apply(null,
+    // additive bounds bracket the main line: lower < base < upper wherever all
+    // three are finite (checked on the section month profile).
+    function bracketsOK(loArr, baseArr, hiArr) {
+      var seen = 0, ok = 0;
+      for (var i = 0; i < baseArr.length; i++) {
+        if (isFinite(loArr[i]) && isFinite(baseArr[i]) && isFinite(hiArr[i])) { seen++; if (loArr[i] < baseArr[i] && baseArr[i] < hiArr[i]) ok++; }
+      }
+      return seen > 0 && ok === seen;
+    }
+    chk('precision bounds bracket the main profile additively', bracketsOK(S.secUnc.precision_lower.monthArr, S.secMonthArr, S.secUnc.precision_upper.monthArr));
+    chk('systematic bounds bracket the main profile additively', bracketsOK(S.secUnc.systematic_uncertainty_lower.monthArr, S.secMonthArr, S.secUnc.systematic_uncertainty_upper.monthArr));
+    // Precision combines in quadrature (with the per-cell 1/sqrt(n_bbp)
+    // reduction), so its combined half-width depends on the averaging mode —
+    // the two modes must give different, finite results. (The directional
+    // guarantee "n_bbp falls faster" is asserted on controlled inputs in
+    // test/test_core.js, where n_bbp and the precision field are hand-built.)
+    S.boxLL = { anchor: [0, 0], active: [S.model.sizes.lat - 1, S.model.sizes.lon - 1], set: GVCore.selRectSet([0, 0], [S.model.sizes.lat - 1, S.model.sizes.lon - 1], S.model.sizes.lon) };
+    function meanPrecHalfWidth() {
+      var sum = 0, cnt = 0;
+      for (var i = 0; i < S.secMonthArr.length; i++) {
+        var hw = S.secUnc.precision_upper.monthArr[i] - S.secMonthArr[i];
+        if (isFinite(hw)) { sum += hw; cnt++; }
+      }
+      return cnt ? sum / cnt : NaN;
+    }
+    S.weightMode = 'physical'; recomputeAll(); var hwPhysical = meanPrecHalfWidth();
+    S.weightMode = 'n_bbp'; recomputeAll(); var hwNbbp = meanPrecHalfWidth();
+    chk('combined precision responds to the averaging weight mode', isFinite(hwPhysical) && isFinite(hwNbbp) && hwPhysical !== hwNbbp);
+    S.weightMode = 'physical'; recomputeAll();
+    // shared colour range must still cover the (now additive) overlay lines
+    chk('shared colour range stretches to cover the overlay bounds', S.secMonthLim[1] >= Math.max.apply(null,
       Array.prototype.filter.call(S.secUnc.systematic_uncertainty_upper.monthArr, isFinite)));
     G.draw();  // exercise the dashed-precision / thin-systematic overlay drawing paths without throwing
     // Switching to a variable with no companions clears the overlays.

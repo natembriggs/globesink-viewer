@@ -159,16 +159,29 @@ var DATASET_DOI = 'https://doi.org/10.5281/zenodo.19558504';
 var CORE_VARS = ['C_200_400','C_400_800','C_800','CHLA_ADJUSTED','D_mean','flux_POC','n_bbp','POCs'];
 // A variable "X" in the fuller published dataset may have companion
 // "X_precision_lower/upper" and/or "X_systematic_uncertainty_lower/upper"
-// variables — the lower/upper bounds of each uncertainty term (not additive
-// deltas). When present for the selected variable, they're overlaid on the
-// depth/lat/lon/month profile panels: precision as a dashed line, systematic
-// uncertainty as a thin solid line, both in the main line's own colour.
+// variables — ADDITIVE uncertainty magnitudes (not absolute bounds). When
+// present for the selected variable they're drawn on the profile panels as
+// bounds around the main line: base − lower and base + upper, precision as a
+// dashed line, systematic uncertainty as a thin solid line, both in a paler
+// tint of the main line's colour.
+//
+// The two uncertainty terms combine differently under the panel averaging,
+// because they are physically different (see combined-uncertainty helpers):
+//   - precision is random / uncorrelated between cells, so it averages down —
+//     combined in quadrature, and each cell's stored (single-measurement)
+//     precision is first divided by sqrt(n_bbp) to get that cell's mean value's
+//     precision; and
+//   - systematic uncertainty is correlated between cells, so it does NOT
+//     average down — combined as the ordinary weighted mean (same reducer as
+//     the value itself).
 var UNC_SUFFIXES = ['precision_lower', 'precision_upper', 'systematic_uncertainty_lower', 'systematic_uncertainty_upper'];
-var UNC_STYLE = {
-  precision_lower:              { width: 1.5, dash: [5, 3] },
-  precision_upper:              { width: 1.5, dash: [5, 3] },
-  systematic_uncertainty_lower: { width: 1,   dash: null },
-  systematic_uncertainty_upper: { width: 1,   dash: null }
+// kind: how the term combines under averaging; sign: which side of the base
+// line the bound sits (lower subtracts, upper adds).
+var UNC_SPEC = {
+  precision_lower:              { kind: 'precision',  sign: -1, width: 1.5, dash: [5, 3] },
+  precision_upper:              { kind: 'precision',  sign: +1, width: 1.5, dash: [5, 3] },
+  systematic_uncertainty_lower: { kind: 'systematic', sign: -1, width: 1,   dash: null },
+  systematic_uncertainty_upper: { kind: 'systematic', sign: +1, width: 1,   dash: null }
 };
 function companionUncVars(model, varName) {
   var out = {};
@@ -248,7 +261,7 @@ function updateVarDesc(){
   var unc = companionUncVars(S.model, S.varName), bits = [];
   if (unc.precision_lower || unc.precision_upper) bits.push('precision (dashed)');
   if (unc.systematic_uncertainty_lower || unc.systematic_uncertainty_upper) bits.push('systematic uncertainty (thin)');
-  if (bits.length) text = (text ? text + ' — ' : '') + bits.join(' & ') + ' shown on side panels.';
+  if (bits.length) text = (text ? text + ' — ' : '') + bits.join(' & ') + ' bounds shown on side panels.';
   el.textContent = text;
 }
 
@@ -474,34 +487,55 @@ function scaledWeights(base, nRows, nCols, rowFactor, colFactor, cellFactor) {
   }
   return out;
 }
-// Weighted depth/month (or lat/lon) marginal profile for an arbitrary variable,
-// computed exactly like the currently-plotted variable's own profile (same
-// selection, missing-value policy and weighting) — used for the precision /
-// systematic-uncertainty companion variables, which each need their own
-// reduction because their own NaN pattern (and hence effective weights) can
-// differ from the main variable's.
-function sectionProfilesFor(varName) {
+// Combined uncertainty MAGNITUDE profiles for a companion variable, reduced
+// over the same selection/weighting as the main profile. `kind` decides how it
+// combines under averaging (see UNC_SPEC / the core reducers):
+//   - 'precision'  → quadrature, with the per-cell 1/sqrt(n_bbp) reduction
+//                    (sectionReduceQuad + quadMarginal*);
+//   - 'systematic' → ordinary weighted mean (same reducers as the value).
+// Returns raw magnitudes; recomputeProfiles turns them into base ± magnitude.
+function sectionUncMagnitude(varName, kind) {
   var m = S.model, s = m.sizes;
-  var weight = new Float64Array(s.depth * s.month);
-  var arr = GVCore.sectionReduce(m, varName, S.keep, S.strict, GVCore.selCells(S.boxLL.set, s.lon), S.weightMode, weight);
-  var td = GVCore.selRowsCols(S.boxTD.set, s.month);
+  var weight = new Float64Array(s.depth * s.month), cells = GVCore.selCells(S.boxLL.set, s.lon);
+  var td = GVCore.selRowsCols(S.boxTD.set, s.month), grid, marRows, marCols;
+  if (kind === 'precision') {
+    grid = GVCore.sectionReduceQuad(m, varName, S.keep, cells, S.weightMode, weight);
+    marRows = GVCore.quadMarginalOverRows; marCols = GVCore.quadMarginalOverCols;
+  } else {
+    grid = GVCore.sectionReduce(m, varName, S.keep, S.strict, cells, S.weightMode, weight);
+    marRows = GVCore.marginalOverRows; marCols = GVCore.marginalOverCols;
+  }
   var topW = S.weightMode === 'physical' ? scaledWeights(weight, s.depth, s.month, m.weights.depth, null, null) : weight;
   var sideW = S.weightMode === 'physical' ? scaledWeights(weight, s.depth, s.month, null, m.weights.month, null) : weight;
   return {
-    monthArr: GVCore.marginalOverRows(arr, s.depth, s.month, td.rows, topW),
-    depthArr: GVCore.marginalOverCols(arr, s.depth, s.month, td.cols, sideW)
+    monthArr: marRows(grid, s.depth, s.month, td.rows, topW),
+    depthArr: marCols(grid, s.depth, s.month, td.cols, sideW)
   };
 }
-function mapProfilesFor(varName) {
+function mapUncMagnitude(varName, kind) {
   var m = S.model, s = m.sizes;
-  var weight = new Float64Array(s.lat * s.lon);
-  var arr = GVCore.mapReduce(m, varName, S.keep, S.strict, GVCore.selCells(S.boxTD.set, s.month), S.weightMode, weight);
-  var ll = GVCore.selRowsCols(S.boxLL.set, s.lon);
+  var weight = new Float64Array(s.lat * s.lon), cells = GVCore.selCells(S.boxTD.set, s.month);
+  var ll = GVCore.selRowsCols(S.boxLL.set, s.lon), grid, marRows, marCols;
+  if (kind === 'precision') {
+    grid = GVCore.mapReduceQuad(m, varName, S.keep, cells, S.weightMode, weight);
+    marRows = GVCore.quadMarginalOverRows; marCols = GVCore.quadMarginalOverCols;
+  } else {
+    grid = GVCore.mapReduce(m, varName, S.keep, S.strict, cells, S.weightMode, weight);
+    marRows = GVCore.marginalOverRows; marCols = GVCore.marginalOverCols;
+  }
   var mapW = S.weightMode === 'physical' ? scaledWeights(weight, s.lat, s.lon, null, null, m.weights.area) : weight;
   return {
-    lonArr: GVCore.marginalOverRows(arr, s.lat, s.lon, ll.rows, mapW),
-    latArr: GVCore.marginalOverCols(arr, s.lat, s.lon, ll.cols, mapW)
+    lonArr: marRows(grid, s.lat, s.lon, ll.rows, mapW),
+    latArr: marCols(grid, s.lat, s.lon, ll.cols, mapW)
   };
+}
+// base + sign*delta elementwise; NaN wherever either is missing (so a bound
+// with no data simply doesn't draw). Turns an additive uncertainty magnitude
+// into the absolute bound line plotted around the main profile.
+function addScaled(base, delta, sign) {
+  var out = new Float32Array(base.length);
+  for (var i = 0; i < base.length; i++) out[i] = base[i] + sign * delta[i];
+  return out;
 }
 function recomputeProfiles() {
   var m = S.model, s = m.sizes;
@@ -515,7 +549,11 @@ function recomputeProfiles() {
     S.secMonthArr = GVCore.marginalOverRows(S.secArr, s.depth, s.month, td.rows, topW);
     S.secDepthArr = GVCore.marginalOverCols(S.secArr, s.depth, s.month, td.cols, sideW);
     S.secUnc = {};
-    Object.keys(S.uncVars).forEach(function (suf) { S.secUnc[suf] = sectionProfilesFor(S.uncVars[suf]); });
+    Object.keys(S.uncVars).forEach(function (suf) {
+      var spec = UNC_SPEC[suf], mag = sectionUncMagnitude(S.uncVars[suf], spec.kind);
+      S.secUnc[suf] = { monthArr: addScaled(S.secMonthArr, mag.monthArr, spec.sign),
+                        depthArr: addScaled(S.secDepthArr, mag.depthArr, spec.sign) };
+    });
   } else { S.secMonthArr = S.secDepthArr = null; S.secUnc = {}; }
   if (S.mapProfiles) {
     var ll = GVCore.selRowsCols(S.boxLL.set, s.lon);
@@ -523,7 +561,11 @@ function recomputeProfiles() {
     S.mapLonArr = GVCore.marginalOverRows(S.mapArr, s.lat, s.lon, ll.rows, mapW);
     S.mapLatArr = GVCore.marginalOverCols(S.mapArr, s.lat, s.lon, ll.cols, mapW);
     S.mapUnc = {};
-    Object.keys(S.uncVars).forEach(function (suf) { S.mapUnc[suf] = mapProfilesFor(S.uncVars[suf]); });
+    Object.keys(S.uncVars).forEach(function (suf) {
+      var spec = UNC_SPEC[suf], mag = mapUncMagnitude(S.uncVars[suf], spec.kind);
+      S.mapUnc[suf] = { lonArr: addScaled(S.mapLonArr, mag.lonArr, spec.sign),
+                        latArr: addScaled(S.mapLatArr, mag.latArr, spec.sign) };
+    });
   } else { S.mapLonArr = S.mapLatArr = null; S.mapUnc = {}; }
 }
 // Flatten one profile axis ('monthArr'|'depthArr'|'lonArr'|'latArr') out of a
@@ -957,8 +999,8 @@ function topProfilePoints(values, axis) {
 function drawUncertaintyOverlaysTop(ctx, R, uncArrays, axis, yPix) {
   UNC_SUFFIXES.forEach(function (suf) {
     var arr = uncArrays[suf]; if (!arr) return;
-    var pts = topProfilePoints(arr, axis), st = UNC_STYLE[suf];
-    drawProfilePathXYStyled(ctx, R, pts.xs, pts.ys, yPix, { color: profileLineColor(), width: st.width, dash: st.dash });
+    var pts = topProfilePoints(arr, axis), st = UNC_SPEC[suf];
+    drawProfilePathXYStyled(ctx, R, pts.xs, pts.ys, yPix, { color: profileUncColor(0.5), width: st.width, dash: st.dash });
   });
 }
 // Top marginal panels (month / longitude) plot every data column of the axis
@@ -988,8 +1030,8 @@ function drawSideProfile(ctx, R, values, yCenter, lim, isDepthProfile, selIdx, y
   if (uncArrays) {
     UNC_SUFFIXES.forEach(function (suf) {
       var arr = uncArrays[suf]; if (!arr) return;
-      var st = UNC_STYLE[suf];
-      drawSideProfilePathStyled(ctx, R, arr, yCenter, xPix, { color: profileLineColor(), width: st.width, dash: st.dash });
+      var st = UNC_SPEC[suf];
+      drawSideProfilePathStyled(ctx, R, arr, yCenter, xPix, { color: profileUncColor(0.5), width: st.width, dash: st.dash });
     });
   }
   ctx.save(); ctx.beginPath(); ctx.rect(R.x,R.y,R.w,R.h); ctx.clip();
@@ -1232,10 +1274,21 @@ function selColor(alpha) {
 // drawn from the current colormap itself (darker of the two end stops) rather
 // than selColor.
 function profileLineColor() {
+  var c = profileLineRGB();
+  return 'rgb(' + (c[0] | 0) + ',' + (c[1] | 0) + ',' + (c[2] | 0) + ')';
+}
+function profileLineRGB() {
   var stops = CMAPS[S.cmap], lo = stops[0], hi = stops[stops.length - 1];
   var lum = function (c) { return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]; };
-  var c = lum(lo) <= lum(hi) ? lo : hi;
-  return 'rgb(' + (c[0] | 0) + ',' + (c[1] | 0) + ',' + (c[2] | 0) + ')';
+  return lum(lo) <= lum(hi) ? lo : hi;
+}
+// Paler tint of the main profile colour for the uncertainty bound lines: mix
+// `frac` of the way toward white so they read as secondary to the bold value
+// line. frac=0.5 is a half-and-half mix.
+function profileUncColor(frac) {
+  var c = profileLineRGB();
+  var mix = function (v) { return v + (255 - v) * frac; };
+  return 'rgb(' + (mix(c[0]) | 0) + ',' + (mix(c[1]) | 0) + ',' + (mix(c[2]) | 0) + ')';
 }
 
 // Outline the union boundary of a cell set: for each selected cell, draw only

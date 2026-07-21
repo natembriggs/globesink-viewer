@@ -486,6 +486,82 @@
     return out; // indexed [y*nX + x]
   }
 
+  // ---- combining a RANDOM (precision) uncertainty through the same means ----
+  //
+  // sectionReduce/mapReduce form a weighted mean  xbar = sum(w x)/sum(w). When
+  // the quantity being averaged carries an UNCORRELATED per-cell error, the
+  // error of that weighted mean propagates in quadrature:
+  //
+  //     sigma_xbar = sqrt( sum_i w_i^2 * sigma_i^2 ) / sum_i w_i
+  //
+  // Two further points make this match how precision actually behaves here:
+  //  1. The stored precision applies to a SINGLE measurement, but each grid
+  //     cell's value is itself a mean of n_bbp measurements, so that cell's
+  //     value has precision sigma_i / sqrt(n_i). We divide by n_i (=n_bbp)
+  //     inside the sum: the per-cell contribution is w_i^2 * sigma_i^2 / n_i.
+  //  2. Weighting by n_bbp then makes the combined precision fall like
+  //     1/sqrt(sum n_i) (the pooled sample size), while area/depth/month
+  //     weighting lets a single imprecise cell with small n_i dominate — the
+  //     two behaviours the two averaging modes are meant to express.
+  // When n_bbp is absent the stored value is taken as the cell precision (n=1).
+  // sectionReduceQuad mirrors sectionReduce's cell set / keep-mask / weights.
+  function sectionReduceQuad(model, varName, keep, cellsYX, weightMode, weightOut) {
+    var s = model.sizes, nP = s.depth, nY = s.lat, nX = s.lon, nM = s.month;
+    var d = model.vars[varName].data, nC = cellsYX.length, nw = nBbpWeights(model, weightMode || 'physical');
+    var nCount = model.vars.n_bbp ? model.vars.n_bbp.data : null;
+    var physicalW = new Float64Array(nC);
+    if (!nw) for (var c = 0; c < nC; c++) physicalW[c] = model.weights.area[cellsYX[c][0] * nX + cellsYX[c][1]];
+    var out = new Float32Array(nP * nM);
+    for (var p = 0; p < nP; p++) {
+      for (var m = 0; m < nM; m++) {
+        var sumW = 0, acc = 0;
+        for (var i = 0; i < nC; i++) {
+          var idx = ((p * nY + cellsYX[i][0]) * nX + cellsYX[i][1]) * nM + m;
+          if (keep && !keep[idx]) continue;
+          var w = nw ? nw[idx] : physicalW[i];
+          if (!isFinite(w) || w <= 0) continue;
+          var v = d[idx];
+          if (isNaN(v)) continue;
+          var n = nCount ? nCount[idx] : 1;
+          if (!isFinite(n) || n <= 0) n = 1;
+          sumW += w; acc += w * w * v * v / n;
+        }
+        var oi = p * nM + m;
+        out[oi] = sumW === 0 ? NaN : Math.sqrt(acc) / sumW;
+        if (weightOut) weightOut[oi] = sumW;
+      }
+    }
+    return out; // indexed [p*nM + m]
+  }
+  function mapReduceQuad(model, varName, keep, cellsPM, weightMode, weightOut) {
+    var s = model.sizes, nP = s.depth, nY = s.lat, nX = s.lon, nM = s.month;
+    var d = model.vars[varName].data, nC = cellsPM.length, nw = nBbpWeights(model, weightMode || 'physical');
+    var nCount = model.vars.n_bbp ? model.vars.n_bbp.data : null;
+    var physicalW = new Float64Array(nC);
+    if (!nw) for (var c = 0; c < nC; c++) physicalW[c] = model.weights.depth[cellsPM[c][0]] * model.weights.month[cellsPM[c][1]];
+    var out = new Float32Array(nY * nX);
+    for (var y = 0; y < nY; y++) {
+      for (var x = 0; x < nX; x++) {
+        var sumW = 0, acc = 0;
+        for (var i = 0; i < nC; i++) {
+          var idx = ((cellsPM[i][0] * nY + y) * nX + x) * nM + cellsPM[i][1];
+          if (keep && !keep[idx]) continue;
+          var w = nw ? nw[idx] : physicalW[i];
+          if (!isFinite(w) || w <= 0) continue;
+          var v = d[idx];
+          if (isNaN(v)) continue;
+          var n = nCount ? nCount[idx] : 1;
+          if (!isFinite(n) || n <= 0) n = 1;
+          sumW += w; acc += w * w * v * v / n;
+        }
+        var oi = y * nX + x;
+        out[oi] = sumW === 0 ? NaN : Math.sqrt(acc) / sumW;
+        if (weightOut) weightOut[oi] = sumW;
+      }
+    }
+    return out; // indexed [y*nX + x]
+  }
+
   // Extra panels below the main two: keep depth+lat (or month+lat) as plotted
   // axes and average over the *ranges currently selected* on the two main
   // panels for the remaining dimension(s) — the same "selected range, not the
@@ -588,6 +664,38 @@
     return out;
   }
 
+  // Quadrature counterparts of the marginal collapses, for continuing a
+  // precision combination across the second reduced axis. Each grid entry is
+  // already a combined std (sqrt(sum w^2 s^2/n)/sum w over the first axis); the
+  // second stage combines those independent stds with weights v_i as
+  // sqrt(sum v_i^2 g_i^2)/sum v_i. Because the weights factor across the two
+  // reduced axes, this two-stage form equals one direct quadrature sum over all
+  // contributing cells (see sectionReduceQuad).
+  function quadMarginalOverRows(grid, nRows, nCols, rows, weights) { // -> nCols
+    var out = new Float32Array(nCols);
+    for (var c = 0; c < nCols; c++) {
+      var sumW = 0, acc = 0;
+      for (var i = 0; i < rows.length; i++) {
+        var idx = rows[i] * nCols + c, g = grid[idx], w = weights ? weights[idx] : 1;
+        if (!isNaN(g) && isFinite(w) && w > 0) { acc += w * w * g * g; sumW += w; }
+      }
+      out[c] = sumW ? Math.sqrt(acc) / sumW : NaN;
+    }
+    return out;
+  }
+  function quadMarginalOverCols(grid, nRows, nCols, cols, weights) { // -> nRows
+    var out = new Float32Array(nRows);
+    for (var r = 0; r < nRows; r++) {
+      var sumW = 0, acc = 0;
+      for (var i = 0; i < cols.length; i++) {
+        var idx = r * nCols + cols[i], g = grid[idx], w = weights ? weights[idx] : 1;
+        if (!isNaN(g) && isFinite(w) && w > 0) { acc += w * w * g * g; sumW += w; }
+      }
+      out[r] = sumW ? Math.sqrt(acc) / sumW : NaN;
+    }
+    return out;
+  }
+
   // Robust colour limits (percentiles) over finite values, optionally >0 for log.
   function robustLimits(arr, loP, hiP, positiveOnly) {
     var vals = [];
@@ -630,10 +738,14 @@
     buildKeepMask: buildKeepMask,
     sectionReduce: sectionReduce,
     mapReduce: mapReduce,
+    sectionReduceQuad: sectionReduceQuad,
+    mapReduceQuad: mapReduceQuad,
     depthLatReduce: depthLatReduce,
     latMonthReduce: latMonthReduce,
     marginalOverRows: marginalOverRows,
     marginalOverCols: marginalOverCols,
+    quadMarginalOverRows: quadMarginalOverRows,
+    quadMarginalOverCols: quadMarginalOverCols,
     robustLimits: robustLimits,
     edgesFromCentres: edgesFromCentres,
     cellIndexForValue: cellIndexForValue,
