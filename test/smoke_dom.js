@@ -602,6 +602,49 @@ try {
   chk('json section shape', js.dims[0] === 'depth' && js.values.length === S.model.sizes.depth && js.values[0].length === S.model.sizes.month);
   chk('json calculation metadata', js.metadata.calculation.weighting.mode === 'physical' && js.metadata.calculation.selection.zero_based_cell_indices.length > 0);
   chk('json source metadata', js.metadata.variable.long_name && js.metadata.dataset.global_attributes.title);
+
+  // ---- annual (5-D) product: year collapse + the two year panels ----
+  S.conditions = [];   // clear the stale n_profiles>=40 condition from the 4-D checks above
+  var fb5 = readFile('example_data/globesink_example_5d.nc', 'binary');
+  G.loadModelFromBuffer(fb5.buffer.slice(fb5.byteOffset, fb5.byteOffset + fb5.byteLength), 'globesink_example_5d.nc');
+  var s5 = S.model.sizes, base5 = s5.depth * s5.lat * s5.lon * s5.month;
+  chk('5-D model hasYear', S.model.hasYear === true);
+  chk('5-D year size', s5.year === 6);
+  chk('5-D collapsed .data is 4-D', S.model.vars[S.varName].data.length === base5);
+  chk('5-D data5d retained', S.model.vars[S.varName].data5d && S.model.vars[S.varName].data5d.length === base5 * s5.year);
+  chk('yearDepthArr sized nP*nYr', S.yearDepthArr && S.yearDepthArr.length === s5.depth * s5.year);
+  chk('yearTrend mean sized nYr', S.yearTrend && S.yearTrend.mean.length === s5.year);
+  chk('yearTrend fit present', S.yearTrend.fit && isFinite(S.yearTrend.fit.b));
+  chk('trend recovers positive slope', S.yearTrend.fit.b > 0);   // synthetic data trends up
+  chk('early missing years -> NaN in trend', isNaN(S.yearTrend.mean[0]));
+  // no-extrapolation: the example's first two years (2015,2016) are missing
+  // everywhere, so the fit's x-extent should start at the first year WITH data
+  // (2017), not the axis start — this is what keeps the drawn line from
+  // extending into years it wasn't fit to.
+  var yrsAll = S.model.coords.year;
+  chk('fit xMin/xMax exclude the missing leading years', S.yearTrend.fit.xMin === yrsAll[2] && S.yearTrend.fit.xMax === yrsAll[5]);
+  G.draw();
+  chk('draw with year panels ok', true);
+
+  // ---- precision error bars on the trend panel ----
+  S.varName = 'flux_POC'; document.getElementById('varSel').value = 'flux_POC'; recomputeAll();
+  chk('flux_POC has precision companions in the 5-D example', !!S.model.vars.flux_POC_precision_lower && !!S.model.vars.flux_POC_precision_upper);
+  chk('yearTrend precLower sized nYr', S.yearTrend.precLower && S.yearTrend.precLower.length === s5.year);
+  chk('yearTrend precUpper sized nYr', S.yearTrend.precUpper && S.yearTrend.precUpper.length === s5.year);
+  chk('some finite precision magnitudes', Array.prototype.some.call(S.yearTrend.precLower, isFinite) && Array.prototype.some.call(S.yearTrend.precUpper, isFinite));
+  G.draw();
+  chk('draw with precision error bars ok', true);
+  // CHLA_ADJUSTED deliberately has no precision companions in the example —
+  // confirms the "no bars available" path is silent (null, not a crash).
+  S.varName = 'CHLA_ADJUSTED'; document.getElementById('varSel').value = 'CHLA_ADJUSTED'; recomputeAll();
+  chk('no precision companions -> null bars, not an error', S.yearTrend.precLower === null && S.yearTrend.precUpper === null);
+  G.draw();
+  chk('draw without precision companions ok', true);
+  S.varName = 'flux_POC'; document.getElementById('varSel').value = 'flux_POC';
+
+  S.weightMode = 'n_bbp'; GVCore.applyYearCollapse(S.model, 'n_bbp'); recomputeKeep(); recomputeAll(); G.draw();
+  chk('5-D n_bbp recompute ok', S.yearDepthArr.length === s5.depth * s5.year && isFinite(S.yearTrend.fit.b));
+  S.weightMode = 'physical'; GVCore.applyYearCollapse(S.model, 'physical'); recomputeKeep(); recomputeAll();
 } catch (e) {
   print('FAIL runtime: ' + e + (e.stack ? '\n' + e.stack : ''));
   fail++;

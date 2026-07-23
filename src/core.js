@@ -114,29 +114,34 @@
     return out;
   }
 
-  function transposeToCanon(flat, srcOrder, sizes) {
-    // sizes: {depth,lat,lon,month}; srcOrder: array of axis names as stored
-    var nP = sizes.depth, nY = sizes.lat, nX = sizes.lon, nM = sizes.month;
+  // Transpose a row-major array from its stored axis order to a canonical axis
+  // order. Works for any rank (used for both the 4-D climatology
+  // [depth,lat,lon,month] and the 5-D annual product [depth,lat,lon,month,year]).
+  // srcOrder / canonOrder are axis-name arrays; sizes maps name -> length.
+  function transposeToCanonN(flat, srcOrder, canonOrder, sizes) {
+    var nd = canonOrder.length;
     // If already canonical, skip the work.
-    var canonical = srcOrder.length === 4 && srcOrder.every(function (d, i) { return d === CANON[i]; });
+    var canonical = srcOrder.length === nd && srcOrder.every(function (d, i) { return d === canonOrder[i]; });
     if (canonical) return flat;
     var srcSizes = srcOrder.map(function (d) { return sizes[d]; });
-    var srcStride = [0, 0, 0, 0];
-    srcStride[3] = 1;
-    for (var k = 2; k >= 0; k--) srcStride[k] = srcStride[k + 1] * srcSizes[k + 1];
+    var srcStride = new Array(nd);
+    srcStride[nd - 1] = 1;
+    for (var k = nd - 2; k >= 0; k--) srcStride[k] = srcStride[k + 1] * srcSizes[k + 1];
     var posOf = {};
     srcOrder.forEach(function (d, i) { posOf[d] = i; });
-    var out = new Float32Array(nP * nY * nX * nM);
-    var o = 0;
-    for (var p = 0; p < nP; p++)
-      for (var y = 0; y < nY; y++)
-        for (var x = 0; x < nX; x++)
-          for (var m = 0; m < nM; m++) {
-            var idx = { depth: p, lat: y, lon: x, month: m };
-            var s = idx.depth * srcStride[posOf.depth] + idx.lat * srcStride[posOf.lat] +
-                    idx.lon * srcStride[posOf.lon] + idx.month * srcStride[posOf.month];
-            out[o++] = flat[s];
-          }
+    var canonSizes = canonOrder.map(function (d) { return sizes[d]; });
+    var canonStrideInSrc = canonOrder.map(function (d) { return srcStride[posOf[d]]; });
+    var total = canonSizes.reduce(function (a, b) { return a * b; }, 1);
+    var out = new Float32Array(total);
+    var idxv = new Array(nd);
+    for (var a = 0; a < nd; a++) idxv[a] = 0;
+    for (var o = 0; o < total; o++) {
+      var s = 0;
+      for (var ax = 0; ax < nd; ax++) s += idxv[ax] * canonStrideInSrc[ax];
+      out[o] = flat[s];
+      // odometer: last canonical axis varies fastest
+      for (var ax2 = nd - 1; ax2 >= 0; ax2--) { if (++idxv[ax2] < canonSizes[ax2]) break; idxv[ax2] = 0; }
+    }
     return out;
   }
 
@@ -149,7 +154,10 @@
   //     `_Netcdf4Coordinates` (dimension id per axis) + each coordinate's
   //     `_Netcdf4Dimid`. If that metadata is missing, fall back to size, then
   //     to a lat-before-lon default.
-  function resolveAxisOrder(shape, attrs, coordInfo, dimidToName) {
+  // `names` is the set of candidate axis names for this variable (CANON for a
+  // 4-D field, CANON+['year'] for a 5-D annual field). Returns the stored axis
+  // order as a full permutation of `names`, or null if the axes don't map.
+  function resolveAxisOrder(shape, attrs, coordInfo, dimidToName, names) {
     var coordAttr = attrs._Netcdf4Coordinates;
     if (coordAttr && !Array.isArray(coordAttr) && !ArrayBuffer.isView(coordAttr)) coordAttr = null;
     var order = [], used = {};
@@ -157,19 +165,19 @@
       var chosen = null;
       if (coordAttr && coordAttr[ax] != null) {
         var nm = dimidToName[coordAttr[ax]];
-        if (nm && !used[nm]) chosen = nm;
+        if (nm && names.indexOf(nm) >= 0 && !used[nm]) chosen = nm;
       }
       if (!chosen) {
-        var cands = CANON.filter(function (nm) { return coordInfo[nm] && coordInfo[nm].len === shape[ax] && !used[nm]; });
+        var cands = names.filter(function (nm) { return coordInfo[nm] && coordInfo[nm].len === shape[ax] && !used[nm]; });
         if (cands.length) chosen = cands[0];
       }
       if (!chosen) return null;
       used[chosen] = true;
       order.push(chosen);
     }
-    // must be a full permutation of the four axes
-    if (order.length !== 4) return null;
-    for (var k = 0; k < CANON.length; k++) if (order.indexOf(CANON[k]) < 0) return null;
+    // must be a full permutation of the candidate axes
+    if (order.length !== names.length) return null;
+    for (var k = 0; k < names.length; k++) if (order.indexOf(names[k]) < 0) return null;
     return order;
   }
 
@@ -177,9 +185,12 @@
     var f = new hdf5.File(arrayBuffer, filename || 'file.nc');
     var keys = f.keys.slice();
 
-    // coordinate variables by canonical name, plus their netCDF-4 dimension id
+    // coordinate variables by canonical name, plus their netCDF-4 dimension id.
+    // `year` is optional: when present the file is the annually resolved 5-D
+    // product [depth,lat,lon,month,year]; when absent it is the 4-D climatology.
+    var AXIS_NAMES = CANON.concat(['year']);
     var coords = {}, coordInfo = {}, coordAttrs = {};
-    CANON.forEach(function (nm) {
+    AXIS_NAMES.forEach(function (nm) {
       if (keys.indexOf(nm) >= 0) {
         var d = f.get(nm);
         coords[nm] = toFloat64(d.value);
@@ -190,20 +201,27 @@
     ['depth', 'lat', 'lon', 'month'].forEach(function (nm) {
       if (!coords[nm]) throw new Error('missing coordinate variable "' + nm + '"');
     });
+    var hasYear = !!coords.year;
+    var varAxes = hasYear ? AXIS_NAMES : CANON;   // axes a data variable may span
     var sizes = { depth: coords.depth.length, lat: coords.lat.length,
                   lon: coords.lon.length, month: coords.month.length };
+    if (hasYear) sizes.year = coords.year.length;
     var dimidToName = {};
-    CANON.forEach(function (nm) { var id = coordInfo[nm].dimid; if (id != null) dimidToName[id] = nm; });
+    AXIS_NAMES.forEach(function (nm) { if (coordInfo[nm] && coordInfo[nm].dimid != null) dimidToName[coordInfo[nm].dimid] = nm; });
 
     var vars = {}, varNames = [];
     keys.forEach(function (key) {
-      if (CANON.indexOf(key) >= 0) return;
+      if (AXIS_NAMES.indexOf(key) >= 0) return;
       var d = f.get(key);
       var shape = d.shape;
-      if (!shape || shape.length !== 4) return; // only 4-D fields
+      // 4-D fields always; 5-D fields only when the file carries a year axis.
+      if (!shape || (shape.length !== 4 && !(hasYear && shape.length === 5))) return;
       var attrs = d.attrs || {};
-      var order = resolveAxisOrder(shape, attrs, coordInfo, dimidToName);
-      if (!order) return; // axes don't map onto depth/lat/lon/month — skip
+      // A 5-D variable spans all axes; a 4-D variable spans depth/lat/lon/month
+      // even inside an annual file (e.g. a static field).
+      var names = shape.length === 5 ? varAxes : CANON;
+      var order = resolveAxisOrder(shape, attrs, coordInfo, dimidToName, names);
+      if (!order) return; // axes don't map onto the coordinates — skip
 
       var fill = scalarAttr(attrs._FillValue);
       var miss = scalarAttr(attrs.missing_value);
@@ -222,14 +240,22 @@
           data[i] = v;
         }
       }
-      data = transposeToCanon(data, order, sizes);
-      vars[key] = {
+      var rec = {
         name: key,
-        data: data,
         units: attrs.units != null ? String(scalarAttr(attrs.units) || attrs.units) : '',
         long_name: attrs.long_name != null ? String(scalarAttr(attrs.long_name) || attrs.long_name) : key,
         attrs: cleanAttrs(attrs)
       };
+      if (shape.length === 5) {
+        // Store the full 5-D array canonically as [depth,lat,lon,month,year]; the
+        // 4-D `.data` used by the main dashboard is materialised by
+        // applyYearCollapse (below) and refreshed whenever weighting changes.
+        rec.data5d = transposeToCanonN(data, order, varAxes, sizes);
+        rec.data = null;
+      } else {
+        rec.data = transposeToCanonN(data, order, CANON, sizes);
+      }
+      vars[key] = rec;
       varNames.push(key);
     });
 
@@ -238,9 +264,10 @@
     var depthEdges = edgesFromCentres(coords.depth), latEdges = midpointEdges(coords.lat);
     var lonEdges = midpointEdges(coords.lon), monthEdges = midpointEdges(coords.month);
     var monthWeights = monthLengthWeights(coords.month);
-    return {
+    var model = {
       filename: filename || 'file.nc',
       globalAttrs: cleanAttrs(f.attrs || {}),
+      hasYear: hasYear,
       sizes: sizes,
       coords: {
         depth: coords.depth, lat: coords.lat, lon: coords.lon, month: coords.month,
@@ -257,6 +284,59 @@
       vars: vars,
       varNames: varNames
     };
+    if (hasYear) {
+      model.coords.year = coords.year;
+      // Materialise the initial (physical, equal-year-weight) annual mean so the
+      // 4-D dashboard has a `.data` for every variable straight away.
+      applyYearCollapse(model, 'physical');
+    }
+    return model;
+  }
+
+  // Collapse the year axis of a 5-D annual model down to the 4-D
+  // [depth,lat,lon,month] `.data` the main dashboard consumes, honouring the
+  // weighting choice. This lets the whole existing 4-D engine run unchanged on
+  // the annual product; call it once at load and again whenever the weighting
+  // mode changes. A no-op for a 4-D climatology.
+  //
+  // Missing years are always ignored (nan-mean) regardless of the strict
+  // missing-value policy — an annual product typically has sparse early years,
+  // and blanking a cell wherever ANY year is missing would gut it. The strict
+  // policy still governs the spatial/month reduction done downstream.
+  //
+  //   - physical weighting: every variable is the equal-weight mean over years.
+  //   - n_bbp weighting:    each variable is  Σ_yr n_bbp·v / Σ_yr n_bbp, and
+  //     n_bbp itself pools as Σ_yr n_bbp so the subsequent n_bbp-weighted
+  //     spatial reduce provably equals one direct weighted mean over all
+  //     contributing 5-D cells (two-stage == one-stage; see README).
+  function applyYearCollapse(model, weightMode) {
+    if (!model.hasYear) return;
+    var s = model.sizes, base = s.depth * s.lat * s.lon * s.month, nYr = s.year;
+    var useN = weightMode === 'n_bbp' && model.vars.n_bbp && model.vars.n_bbp.data5d;
+    var nbbp5 = useN ? model.vars.n_bbp.data5d : null;
+    Object.keys(model.vars).forEach(function (name) {
+      var v = model.vars[name];
+      if (!v.data5d) return;               // genuine 4-D field inside an annual file
+      var d5 = v.data5d, out = new Float32Array(base), isCount = (name === 'n_bbp');
+      for (var i = 0; i < base; i++) {
+        var o5 = i * nYr, sum = 0, sw = 0, any = false;
+        for (var yr = 0; yr < nYr; yr++) {
+          var val = d5[o5 + yr];
+          if (isNaN(val)) continue;
+          if (useN && !isCount) {
+            var w = nbbp5[o5 + yr];
+            if (!isFinite(w) || w <= 0) continue;
+            sum += w * val; sw += w;
+          } else if (useN && isCount) {
+            sum += val; any = true;        // pool counts: Σ_yr n_bbp
+          } else {
+            sum += val; sw += 1;           // physical: equal-year mean
+          }
+        }
+        out[i] = (useN && isCount) ? (any ? sum : NaN) : (sw > 0 ? sum / sw : NaN);
+      }
+      v.data = out;
+    });
   }
 
   // Build a keep-mask (Uint8Array, 1=include) from conditions on other vars.
@@ -694,6 +774,173 @@
     return out;
   }
 
+  // ---- annual (5-D) panels ----
+  // These operate directly on each variable's raw 5-D `.data5d`
+  // [depth,lat,lon,month,year] (index = idx4*nYr + year, where idx4 is the
+  // canonical 4-D index), keeping YEAR as a plotted axis rather than collapsing
+  // it. They follow the same physical / n_bbp weighting and 4-D keep-mask as the
+  // main reducers. `keep`, when given, is the 4-D annual keep mask, applied at
+  // each cell's (depth,lat,lon,month) position for every year.
+
+  // Upper-left panel: value(depth, year) for a set of lat/lon cells and month
+  // columns — i.e. average over the selected lat/lon box and month(s), keeping
+  // depth and year. cellsYX = [y,x] pairs (map selection); monthCols = month
+  // indices (section selection). Physical weight = grid-cell area × month length
+  // (depth is a kept axis, so its width cancels). Returns [p*nYr + yr].
+  function yearDepthReduce(model, varName, keep, cellsYX, monthCols, weightMode, weightOut) {
+    var s = model.sizes, nP = s.depth, nY = s.lat, nX = s.lon, nM = s.month, nYr = s.year;
+    var d5 = model.vars[varName] && model.vars[varName].data5d;
+    if (!d5) return null;
+    var nw = (weightMode === 'n_bbp' && model.vars.n_bbp) ? model.vars.n_bbp.data5d : null;
+    var area = model.weights.area, monW = model.weights.month;
+    var out = new Float32Array(nP * nYr);
+    for (var p = 0; p < nP; p++) {
+      for (var yr = 0; yr < nYr; yr++) {
+        var sum = 0, sumW = 0;
+        for (var a = 0; a < cellsYX.length; a++) {
+          var y = cellsYX[a][0], x = cellsYX[a][1];
+          for (var mi = 0; mi < monthCols.length; mi++) {
+            var m = monthCols[mi];
+            var idx4 = ((p * nY + y) * nX + x) * nM + m;
+            if (keep && !keep[idx4]) continue;
+            var idx5 = idx4 * nYr + yr;
+            var val = d5[idx5];
+            if (isNaN(val)) continue;
+            var w = nw ? nw[idx5] : area[y * nX + x] * monW[m];
+            if (!isFinite(w) || w <= 0) continue;
+            sum += w * val; sumW += w;
+          }
+        }
+        var oi = p * nYr + yr;
+        out[oi] = sumW > 0 ? sum / sumW : NaN;
+        if (weightOut) weightOut[oi] = sumW;
+      }
+    }
+    return out; // indexed [p*nYr + yr]
+  }
+
+  // Upper-right panel: the mean value in each year over the FULL selected region
+  // — the lat/lon box (cellsYX, map selection) crossed with the depth/month box
+  // (cellsPM, section selection). Physical weight = area × depth-width × month.
+  // Returns a Float64Array of length nYr (NaN for years with no data).
+  function yearProfileReduce(model, varName, keep, cellsYX, cellsPM, weightMode) {
+    var s = model.sizes, nY = s.lat, nX = s.lon, nM = s.month, nYr = s.year;
+    var d5 = model.vars[varName] && model.vars[varName].data5d;
+    if (!d5) return null;
+    var nw = (weightMode === 'n_bbp' && model.vars.n_bbp) ? model.vars.n_bbp.data5d : null;
+    var area = model.weights.area, depW = model.weights.depth, monW = model.weights.month;
+    var out = new Float64Array(nYr);
+    for (var yr = 0; yr < nYr; yr++) {
+      var sum = 0, sumW = 0;
+      for (var a = 0; a < cellsYX.length; a++) {
+        var y = cellsYX[a][0], x = cellsYX[a][1];
+        for (var b = 0; b < cellsPM.length; b++) {
+          var p = cellsPM[b][0], m = cellsPM[b][1];
+          var idx4 = ((p * nY + y) * nX + x) * nM + m;
+          if (keep && !keep[idx4]) continue;
+          var idx5 = idx4 * nYr + yr;
+          var val = d5[idx5];
+          if (isNaN(val)) continue;
+          var w = nw ? nw[idx5] : area[y * nX + x] * depW[p] * monW[m];
+          if (!isFinite(w) || w <= 0) continue;
+          sum += w * val; sumW += w;
+        }
+      }
+      out[yr] = sumW > 0 ? sum / sumW : NaN;
+    }
+    return out; // length nYr
+  }
+
+  // Precision error bars for the trend panel: combines an ADDITIVE precision-
+  // magnitude companion variable (see UNC_SPEC in index.html — the stored value
+  // is each cell's own Poisson-counting precision) in plain quadrature over the
+  // FULL selected region for each year, mirroring yearProfileReduce's cell set
+  // but summing in quadrature like sectionReduceQuad/mapReduceQuad instead of
+  // averaging. varName here is the companion variable's own name (e.g.
+  // "flux_POC_precision_upper"), which must itself carry a year dimension
+  // (data5d) — returns null otherwise, so a file/variable without per-year
+  // precision simply gets no error bars rather than a wrong constant one.
+  function yearProfileReduceQuad(model, varName, keep, cellsYX, cellsPM, weightMode) {
+    var s = model.sizes, nY = s.lat, nX = s.lon, nM = s.month, nYr = s.year;
+    var d5 = model.vars[varName] && model.vars[varName].data5d;
+    if (!d5) return null;
+    var nw = (weightMode === 'n_bbp' && model.vars.n_bbp) ? model.vars.n_bbp.data5d : null;
+    var area = model.weights.area, depW = model.weights.depth, monW = model.weights.month;
+    var out = new Float64Array(nYr);
+    for (var yr = 0; yr < nYr; yr++) {
+      var sumW = 0, acc = 0;
+      for (var a = 0; a < cellsYX.length; a++) {
+        var y = cellsYX[a][0], x = cellsYX[a][1];
+        for (var b = 0; b < cellsPM.length; b++) {
+          var p = cellsPM[b][0], m = cellsPM[b][1];
+          var idx4 = ((p * nY + y) * nX + x) * nM + m;
+          if (keep && !keep[idx4]) continue;
+          var idx5 = idx4 * nYr + yr;
+          var val = d5[idx5];
+          if (isNaN(val)) continue;
+          var w = nw ? nw[idx5] : area[y * nX + x] * depW[p] * monW[m];
+          if (!isFinite(w) || w <= 0) continue;
+          sumW += w; acc += w * w * val * val;
+        }
+      }
+      out[yr] = sumW > 0 ? Math.sqrt(acc) / sumW : NaN;
+    }
+    return out; // length nYr
+  }
+
+  // Two-sided 97.5th-percentile Student-t critical value (for a 95% CI), via a
+  // Cornish–Fisher expansion of the standard-normal 0.975 quantile in 1/df.
+  // Accurate to ~1e-3 for df >= 3 (t(14)=2.1448); df>=1 handled, exact-ish by
+  // df=inf -> 1.95996.
+  function tCrit95(df) {
+    if (!(df > 0)) return NaN;
+    var z = 1.959963984540054, z2 = z * z, z3 = z2 * z, z5 = z3 * z2, z7 = z5 * z2;
+    var g1 = (z3 + z) / 4;
+    var g2 = (5 * z5 + 16 * z3 + 3 * z) / 96;
+    var g3 = (3 * z7 + 19 * z5 + 17 * z3 - 15 * z) / 384;
+    return z + g1 / df + g2 / (df * df) + g3 / (df * df * df);
+  }
+
+  // Ordinary-least-squares linear regression y = offset + b·(x − mx) over the
+  // finite pairs, with standard errors and 95% confidence intervals on BOTH
+  // coefficients (Student-t, df = n-2) and r². The intercept is MEAN-CENTRED
+  // (mx = mean(x), offset = fitted value at x = mx, i.e. mean(y)) rather than
+  // reported at x = 0: for year data an x=0 intercept is a meaningless
+  // extrapolation with an inflated, hard-to-interpret CI, whereas at x = mx the
+  // slope and intercept estimators are uncorrelated so seOffset reduces to the
+  // plain standard error of the mean, sqrt(s2/n). Each valid year contributes
+  // one equally weighted point (the per-year mean already carries the
+  // within-year spatial weighting). Also returns xMin/xMax, the extremes of the
+  // x values actually used, so a caller can draw the fit line only across the
+  // data it was fit to rather than extrapolating. Returns null if fewer than 3
+  // finite points.
+  function linregCI(xs, ys) {
+    var x = [], y = [];
+    for (var i = 0; i < ys.length; i++) {
+      if (isFinite(xs[i]) && isFinite(ys[i]) && !isNaN(ys[i])) { x.push(xs[i]); y.push(ys[i]); }
+    }
+    var n = x.length;
+    if (n < 3) return null;
+    var mx = 0, my = 0, k, xMin = Infinity, xMax = -Infinity;
+    for (k = 0; k < n; k++) { mx += x[k]; my += y[k]; if (x[k] < xMin) xMin = x[k]; if (x[k] > xMax) xMax = x[k]; }
+    mx /= n; my /= n;
+    var Sxx = 0, Sxy = 0, Syy = 0;
+    for (k = 0; k < n; k++) { var dx = x[k] - mx, dy = y[k] - my; Sxx += dx * dx; Sxy += dx * dy; Syy += dy * dy; }
+    if (Sxx <= 0) return null;                 // all x equal — no slope defined
+    var b = Sxy / Sxx, offset = my;            // y = offset + b*(x - mx)
+    var sse = 0;
+    for (k = 0; k < n; k++) { var e = y[k] - (offset + b * (x[k] - mx)); sse += e * e; }
+    var df = n - 2, s2 = sse / df;
+    var seB = Math.sqrt(s2 / Sxx), seOffset = Math.sqrt(s2 / n);
+    var t = tCrit95(df);
+    var r2 = Syy > 0 ? (Sxy * Sxy) / (Sxx * Syy) : (sse === 0 ? 1 : 0);
+    return {
+      mx: mx, offset: offset, b: b, seOffset: seOffset, seB: seB,
+      ciOffset: [offset - t * seOffset, offset + t * seOffset], ciB: [b - t * seB, b + t * seB],
+      r2: r2, n: n, df: df, tcrit: t, xMin: xMin, xMax: xMax
+    };
+  }
+
   // Robust colour limits (percentiles) over finite values, optionally >0 for log.
   function robustLimits(arr, loP, hiP, positiveOnly) {
     var vals = [];
@@ -740,6 +987,12 @@
     mapReduceQuad: mapReduceQuad,
     depthLatReduce: depthLatReduce,
     latMonthReduce: latMonthReduce,
+    applyYearCollapse: applyYearCollapse,
+    yearDepthReduce: yearDepthReduce,
+    yearProfileReduce: yearProfileReduce,
+    yearProfileReduceQuad: yearProfileReduceQuad,
+    linregCI: linregCI,
+    tCrit95: tCrit95,
     marginalOverRows: marginalOverRows,
     marginalOverCols: marginalOverCols,
     quadMarginalOverRows: quadMarginalOverRows,

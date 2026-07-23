@@ -9,6 +9,13 @@ POC, POC flux, particle size). It reads a NetCDF-4 file entirely in the browser
 - **Right — map**, averaged over a month range and depth range (defaults to the
   annual mean at the 10–50 m depth bin).
 
+It also reads the **annually resolved 5-D product** (`[depth, lat, lon, month,
+year]`): when a file carrying a `year` dimension is loaded, the whole dashboard
+runs on the year-averaged field (collapsed with the current weighting) and two
+extra panels appear **above** the main pair — a **year × depth** heatmap and an
+**interannual trend** plot with a least-squares fit. See *Annual (5-D) product*
+below.
+
 Drag a box on either panel to redefine the averaging region for the other:
 drag on the **map** to set the lat/lon box (updates the section); drag on the
 **section** to set the month × depth box (updates the map). Your current
@@ -111,6 +118,43 @@ selection stays on each panel as a thin magenta rectangle.
 - **Land overlay:** a 50 m coastline (islands down to ~Kerguelen) is drawn over
   the map, masking the data under land.
 
+## Annual (5-D) product
+
+The published climatology is 4-D (`[depth, lat, lon, month]`). A parallel
+**annually resolved** product adds a trailing `year` dimension
+(`[depth, lat, lon, month, year]`). When the viewer detects a `year` coordinate
+variable it switches into annual mode:
+
+- **The whole existing dashboard keeps working**, run on a **year-averaged**
+  view of the data. The year axis is collapsed to the 4-D field the main panels
+  expect, honouring the current *Averaging weights* choice: under **physical**
+  weighting every variable is the equal-year mean; under **n_bbp** weighting
+  each variable is `Σ_yr n_bbp·value / Σ_yr n_bbp` and `n_bbp` itself pools as
+  `Σ_yr n_bbp`, so a two-stage (collapse-then-reduce) average provably equals one
+  direct weighted mean over all contributing 5-D cells. Missing years are always
+  ignored in this collapse (an annual product typically has sparse early years);
+  the strict missing-value policy still governs the spatial/month reduction.
+  Changing the weighting re-collapses the annual mean live.
+- **Two extra panels appear above the main pair** (which shrink 25% vertically to
+  make room). Both are display-only outputs of the current section/map
+  selection:
+  - **Upper-left — year × depth heatmap**, for the month(s) and lat/lon range
+    selected below (averaged over those with the current weighting).
+  - **Upper-right — interannual trend**: the mean of the selected variable over
+    the full selected region (the map's lat/lon box × the section's depth/month
+    box) in each year, drawn as points with an ordinary-least-squares trend
+    line and its equation `y = (slope ± CI)·(year − mean year) + (offset ± CI)`,
+    where both `±` are **95% confidence-interval half-widths** (Student-t,
+    `df = n−2`), plus r² and n on a second line. The intercept is
+    **mean-centred** — `offset` is the fitted value at the mean year, not a
+    year-0 extrapolation — which also gives it a much tighter, more meaningful
+    CI than an x=0 intercept would. Years with no data are dropped; a fit needs
+    at least three.
+
+The 4-D climatology is unaffected — the two year panels stay hidden for it, and
+the reduction engine is byte-for-byte the same code path (verified by the
+unchanged numpy golden checks).
+
 ## Running it
 
 Serve the folder over http, then open it — the smoothed climatology loads
@@ -136,6 +180,14 @@ GLOBESINK NetCDF variables are 4-D over `depth`, `lat`, `lon`, `month`
 `scale_factor`/`add_offset` are handled on read, and every variable is
 normalised internally to `[depth, lat, lon, month]`.
 
+The **annual product** additionally carries a `year` coordinate variable and 5-D
+variables over `depth`, `lat`, `lon`, `month`, `year`; these are normalised to
+`[depth, lat, lon, month, year]`, with the year axis collapsed to the 4-D field
+the dashboard consumes (see *Annual (5-D) product*). A 4-D variable inside such a
+file (e.g. a static field) is still read as 4-D. The extra `year` axis is
+resolved the same way as the others — by length, with the netCDF-4 dimension-id
+metadata disambiguating any equal-length axes.
+
 **On axis order:** MATLAB's `nccreate` writes the dimensions in *reversed*
 storage order (`[month, lon, lat, depth]`), and the CF `coordinates` attribute
 does not track storage order — so neither is trusted. The viewer instead
@@ -159,9 +211,12 @@ file picker to try the dashboard without real data:
 
 - `globesink_example.nc` — raw 4°×8° grid.
 - `globesink_example_interpolated.nc` — finer 2°×2° grid.
+- `globesink_example_5d.nc` — a small **annually resolved** (5-D) file with a
+  `year` dimension, a mild interannual trend and some fully-missing early years,
+  used to exercise the year panels.
 
-Regenerate them with `python3 tools/make_example_data.py` (needs `netCDF4`,
-`numpy`).
+Regenerate them with `python3 tools/make_example_data.py` and
+`python3 tools/make_example_data_5d.py` (need `netCDF4`, `numpy`).
 
 ## Layout
 
@@ -240,13 +295,16 @@ test/run.sh
 It (1) checks physical and `n_bbp` weighted reducers, the marginal-profile
 collapses (including the discontiguous-selection union rule), the extra-panel
 (lat×depth, month×lat) reducers, the Excel-like selection edit logic
-(click/shift/ctrl/arrow), the panel-shrink layout math, and cross-variable
-conditions — against `numpy` values or hand-derived cases — and (2) runs the
-full `index.html` wiring (including all four marginal profiles, both extra
-panels, both weighting modes, and linked/unlinked scales) against a stubbed
-DOM/Canvas to catch runtime errors. Currently 69 core checks + 91 wiring
-checks, all passing. Rendering itself (pixels, drag interactions, visual
-alignment of the marginal/extra panels) can only be verified in a real browser.
+(click/shift/ctrl/arrow), the panel-shrink layout math, cross-variable
+conditions, and the annual (5-D) year collapse / year-panel reducers / trend
+regression with 95% CIs — against `numpy` values or hand-derived cases — and (2)
+runs the full `index.html` wiring (including all four marginal profiles, both
+extra panels, the two annual year panels, both weighting modes, and
+linked/unlinked scales) against a stubbed DOM/Canvas to catch runtime errors.
+The 5-D checks build a tiny synthetic annual model in memory and load a small
+5-D example file (`globesink_example_5d.nc`) through the real path. All 93 core
+checks pass. Rendering itself (pixels, drag interactions, visual alignment of
+the marginal/extra/year panels) can only be verified in a real browser.
 
 ## Coastline data
 

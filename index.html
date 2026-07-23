@@ -23,7 +23,7 @@
   #condList:not(:empty) { margin-top:6px; }
   .cond { display:flex; gap:6px; align-items:center; margin-bottom:5px; flex-wrap:wrap; }
   .cond .x { border-color:#e0a0c0; color:var(--accent); }
-  #plots, #plots2 { display:flex; flex-wrap:wrap; gap:6px; padding:10px; }
+  #plots, #plots2, #plots0 { display:flex; flex-wrap:wrap; gap:6px; padding:10px; }
   .panelwrap { flex:1 1 460px; min-width:340px; border:1px solid transparent; border-radius:6px; padding:4px; }
   .panelwrap.focused { border-color:var(--accent); }
   .panelwrap h3 { margin:0 0 4px; font-size:13px; font-weight:600; text-align:center; }
@@ -125,6 +125,21 @@
 </div>
 
 <div id="loadOverlay" hidden></div>
+
+<!-- Annual (5-D) product only: two panels above the main pair. Shown when a
+     file carrying a `year` dimension is loaded; hidden for the climatology. -->
+<div id="plots0" style="display:none">
+  <div class="panelwrap">
+    <h3 id="yearDepthTitle">year × depth</h3>
+    <canvas id="yearDepthCanvas"></canvas>
+    <div class="hint" style="text-align:center">Year × depth for the month(s) and lat/lon range selected on the panels below, averaged with the current weighting. Display only — set the range using the section and map below.</div>
+  </div>
+  <div class="panelwrap">
+    <h3 id="yearTrendTitle">interannual trend</h3>
+    <canvas id="yearTrendCanvas"></canvas>
+    <div class="hint" style="text-align:center">Mean over the full selected region in each year, with an ordinary-least-squares trend line, its equation, r², and 95% confidence intervals on slope and intercept.</div>
+  </div>
+</div>
 
 <div id="plots">
   <div class="panelwrap">
@@ -274,6 +289,9 @@ var S = {
   secArr: null, mapArr: null, secWeight: null, mapWeight: null,
   secMonthArr: null, secDepthArr: null, mapLonArr: null, mapLatArr: null,
   depthLatArr: null, latMonthArr: null, depthLatWeight: null, latMonthWeight: null,
+  // annual (5-D) panels: year×depth heatmap grid [depth*nYr+yr] and the
+  // interannual trend {years, mean[year], fit} (see recomputeYearPanels)
+  yearDepthArr: null, yearDepthWeight: null, yearDepthLim: [0, 1], yearTrend: null,
   // companion precision/systematic-uncertainty profiles for the current variable
   // (see companionUncVars); keyed by suffix, each value {monthArr,depthArr} or
   // {lonArr,latArr}. Empty when the variable has no such companions.
@@ -509,6 +527,12 @@ function loadModelFromBuffer(ab, name, source, gen) {
     // extra-panel interaction anchors are just drag origins — drop them on load
     // (they default to the current selection's corner when next needed)
     S.dlAnchor = S.dlActive = S.lmAnchor = S.lmActive = null;
+    // Annual (5-D) product: reveal the two year panels above, and materialise the
+    // annual mean for the chosen weighting so the 4-D dashboard runs on it.
+    // (parseNetCDF already collapsed with physical weighting; redo it here in
+    // case the carried-over weighting is n_bbp.)
+    document.getElementById('plots0').style.display = model.hasYear ? 'flex' : 'none';
+    if (model.hasYear) GVCore.applyYearCollapse(model, S.weightMode);
     rebuildCondVarOptions();
     recomputeKeep();
     recomputeAll();
@@ -516,7 +540,8 @@ function loadModelFromBuffer(ab, name, source, gen) {
     hideOverlay();
     setStatus('Loaded ' + name + ' — ' + model.varNames.length + ' variables, grid ' +
       model.sizes.depth + '×' + model.sizes.lat + '×' + model.sizes.lon + '×' + model.sizes.month +
-      ' (depth×lat×lon×month).', 'ok');
+      (model.hasYear ? '×' + model.sizes.year + ' (depth×lat×lon×month×year).'
+                     : ' (depth×lat×lon×month).'), 'ok');
     return true;
   } catch (e) {
     loadFailed('Failed to read ' + name + ': ' + e.message +
@@ -540,6 +565,7 @@ function recomputeAll() {
     GVCore.selCells(S.boxTD.set, s.month), S.weightMode, S.mapWeight);
   recomputeProfiles();
   recomputeExtraPanels();
+  recomputeYearPanels();
   if (S.autoRange) {
     if (S.linkScales) {
       // Water shallower than the selected depth range shouldn't stretch the
@@ -557,6 +583,7 @@ function recomputeAll() {
       // separately below.
       var heatmaps = [secArrDeep, S.mapArr];
       if (S.extraPanels) heatmaps.push(S.depthLatArr, S.latMonthArr);
+      if (S.model.hasYear && S.yearDepthArr) heatmaps.push(S.yearDepthArr);
       var marginals = [];
       // Uncertainty overlay lines must also stay fully on-panel, so their
       // extrema are folded into the shared colour range alongside the main
@@ -600,6 +627,9 @@ function recomputeAll() {
       if (S.extraPanels) {
         S.depthLatLim = safeLimits(GVCore.robustLimits(S.depthLatArr, 0.02, 0.98, S.log), S.log);
         S.latMonthLim = safeLimits(GVCore.robustLimits(S.latMonthArr, 0.02, 0.98, S.log), S.log);
+      }
+      if (S.model.hasYear && S.yearDepthArr) {
+        S.yearDepthLim = safeLimits(GVCore.robustLimits(S.yearDepthArr, 0.02, 0.98, S.log), S.log);
       }
     }
     // the min/max boxes echo the map panel's range (the one usually tuned for
@@ -735,6 +765,39 @@ function recomputeExtraPanels() {
   S.depthLatArr = GVCore.depthLatReduce(m, S.varName, S.keep, S.strict, ll.cols, td.cols, S.weightMode, S.depthLatWeight);
   S.latMonthArr = GVCore.latMonthReduce(m, S.varName, S.keep, S.strict, td.rows, ll.cols, S.weightMode, S.latMonthWeight);
 }
+// Annual (5-D) product: the two year panels above the main pair. Both are
+// display-only outputs of the current selection (not themselves selectable),
+// so they simply recompute whenever the section/map selection changes.
+//   - yearDepthArr: value(depth, year) over the selected lat/lon box and month(s)
+//   - yearTrend:    region-mean per year (full selected box) + OLS fit with CIs
+function recomputeYearPanels() {
+  var m = S.model, s = m.sizes;
+  if (!m.hasYear) { S.yearDepthArr = null; S.yearTrend = null; return; }
+  var cellsYX = GVCore.selCells(S.boxLL.set, s.lon);            // map lat/lon selection
+  var cellsPM = GVCore.selCells(S.boxTD.set, s.month);          // section depth/month selection
+  var monthCols = GVCore.selRowsCols(S.boxTD.set, s.month).cols;
+  S.yearDepthWeight = new Float64Array(s.depth * s.year);
+  S.yearDepthArr = GVCore.yearDepthReduce(m, S.varName, S.keep, cellsYX, monthCols, S.weightMode, S.yearDepthWeight);
+  var yv = GVCore.yearProfileReduce(m, S.varName, S.keep, cellsYX, cellsPM, S.weightMode);
+  var prec = yearTrendPrecision(cellsYX, cellsPM);
+  S.yearTrend = { years: m.coords.year, mean: yv, fit: GVCore.linregCI(m.coords.year, yv),
+                  precLower: prec.lower, precUpper: prec.upper };
+}
+// Precision error bars for the trend panel: reuses the SAME additive precision
+// companion variables as the marginal side panels (see UNC_SPEC /
+// sectionUncMagnitude), but combined once over the FULL selected region for
+// each year — one direct quadrature sum rather than a two-stage marginal
+// collapse. The companion variable must itself carry a year dimension
+// (data5d) for this to be meaningful; GVCore.yearProfileReduceQuad returns
+// null otherwise, so a file/variable without per-year precision simply gets
+// no error bars.
+function yearTrendPrecision(cellsYX, cellsPM) {
+  var m = S.model, unc = companionUncVars(m, S.varName);
+  return {
+    lower: unc.precision_lower ? GVCore.yearProfileReduceQuad(m, unc.precision_lower, S.keep, cellsYX, cellsPM, S.weightMode) : null,
+    upper: unc.precision_upper ? GVCore.yearProfileReduceQuad(m, unc.precision_upper, S.keep, cellsYX, cellsPM, S.weightMode) : null
+  };
+}
 function concatArrays(arrays) {
   var n = 0; arrays.forEach(function(a){ if(a) n += a.length; });
   var out = new Float32Array(n), at = 0;
@@ -804,6 +867,7 @@ function setAllLimits(lim) {
   S.secMonthLim = lim.slice(); S.secDepthLim = lim.slice();
   S.mapLonLim = lim.slice(); S.mapLatLim = lim.slice();
   S.depthLatLim = lim.slice(); S.latMonthLim = lim.slice();
+  S.yearDepthLim = lim.slice();
 }
 function fmtNum(v){ var a=Math.abs(v); return a && (a<1e-3||a>=1e5) ? v.toExponential(2) : (+v.toPrecision(4)).toString(); }
 
@@ -846,6 +910,12 @@ function updateTitles() {
       'lon ' + edgeRunsLabel(rcSec.cols, c.lonEdges, fmtLon) + ',  ' + monthRunsLabel(rcMap.cols);
     document.getElementById('latMonthTitle').textContent =
       depthRunsLabel(rcMap.rows) + ',  lon ' + edgeRunsLabel(rcSec.cols, c.lonEdges, fmtLon);
+  }
+  if (S.model.hasYear) {
+    document.getElementById('yearDepthTitle').textContent =
+      'lat ' + edgeRunsLabel(rcSec.rows, c.latEdges, fmtLat) + ', lon ' + edgeRunsLabel(rcSec.cols, c.lonEdges, fmtLon) + ',  ' + monthRunsLabel(rcMap.cols);
+    document.getElementById('yearTrendTitle').textContent =
+      'region mean by year — ' + monthRunsLabel(rcMap.cols) + ', ' + depthRunsLabel(rcMap.rows);
   }
 }
 
@@ -1814,6 +1884,136 @@ function drawLatMonth(sharedH) {
   latMonthGeom = { R: R, cv: cv, colAxis: monthAxis, lat0: lat0, lat1: lat1 };
 }
 
+// ----- annual (5-D) upper-left panel: x=year, y=depth heatmap. Display only. -----
+function drawYearDepth(sharedH) {
+  var cv = document.getElementById('yearDepthCanvas');
+  var cssW = cv.parentElement.clientWidth, cssH = sharedH || Math.max(240, Math.round(cssW * 0.55));
+  var ctx = setupCanvas(cv, cssW, cssH), R = plotRect(cssW, cssH, false);
+  var m = S.model, nP = m.sizes.depth, nYr = m.sizes.year, yrs = m.coords.year;
+  var dTop = m.coords.depthEdges[0], dBot = m.coords.depthEdges[nP];
+  // year is a plain equal-width, non-panning axis
+  var yearAxis = {
+    leftPix: function (c) { return R.x + (c / nYr) * R.w; },
+    rightPix: function (c) { return R.x + ((c + 1) / nYr) * R.w; },
+    slotOf: function (c) { return c; }
+  };
+  var yEdgePix = function (r) { return R.y + ((m.coords.depthEdges[r] - dTop) / (dBot - dTop)) * R.h; };
+  ctx.clearRect(0, 0, cssW, cssH);
+  if (S.yearDepthArr) drawCells(ctx, R, nYr, nP, yearAxis, yEdgePix, function (r, c) { return S.yearDepthArr[r * nYr + c]; }, S.yearDepthLim);
+  frame(ctx, R);
+  axisStyle(ctx); ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+  var step = Math.max(1, Math.ceil(nYr / 8));
+  for (var c = 0; c < nYr; c++) {
+    if (c % step !== 0 && c !== nYr - 1) continue;
+    var xx = (yearAxis.leftPix(c) + yearAxis.rightPix(c)) / 2;
+    ctx.beginPath(); ctx.moveTo(xx, R.y + R.h); ctx.lineTo(xx, R.y + R.h + 3); ctx.stroke();
+    ctx.fillText(String(Math.round(yrs[c])), xx, R.y + R.h + 5);
+  }
+  ctx.fillText('year', R.x + R.w / 2, R.y + R.h + 18);
+  ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
+  [0, 200, 400, 600, 800, 1000, 1200, 1400, 1600, 1800, 2000].forEach(function (dv) {
+    if (dv >= dTop && dv <= dBot) { var yy = R.y + ((dv - dTop) / (dBot - dTop)) * R.h; ctx.beginPath(); ctx.moveTo(R.x - 3, yy); ctx.lineTo(R.x, yy); ctx.stroke(); ctx.fillText(dv, R.x - 6, yy); }
+  });
+  ctx.save(); ctx.translate(14, R.y + R.h / 2); ctx.rotate(-Math.PI / 2); ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText('depth (m)', 0, 0); ctx.restore();
+  drawColorbar(ctx, cssW, R, varLabel(), S.yearDepthLim);
+}
+
+// ----- annual (5-D) upper-right panel: region-mean vs year, with an OLS trend
+// line, equation, r² and 95% CIs on both coefficients. Display only. -----
+function drawYearTrend(sharedH) {
+  var cv = document.getElementById('yearTrendCanvas');
+  var cssW = cv.parentElement.clientWidth, cssH = sharedH || Math.max(240, Math.round(cssW * 0.55));
+  var ctx = setupCanvas(cv, cssW, cssH), R = plotRect(cssW, cssH, false);
+  var m = S.model, nYr = m.sizes.year, yrs = m.coords.year;
+  var T = S.yearTrend, mean = T ? T.mean : null, fit = T ? T.fit : null;
+  var precLower = T ? T.precLower : null, precUpper = T ? T.precUpper : null;
+  // y = offset + b*(x - mx): the intercept is mean-centred (offset is the fitted
+  // value AT the mean year, not an x=0 extrapolation — see linregCI in core.js).
+  var fitY = fit ? function (xv) { return fit.offset + fit.b * (xv - fit.mx); } : null;
+  ctx.clearRect(0, 0, cssW, cssH);
+  // value (y) range from finite year means (+ their error bars, if any) and the
+  // fit-line endpoints — xMin/xMax (NOT the full axis) so an unfilled y-range
+  // outside the actual data extent never gets pulled in either.
+  var lo = Infinity, hi = -Infinity, i;
+  if (mean) for (i = 0; i < nYr; i++) {
+    var v = mean[i]; if (isNaN(v)) continue;
+    if (v < lo) lo = v; if (v > hi) hi = v;
+    if (precLower && isFinite(precLower[i])) { var vLo = v - precLower[i]; if (vLo < lo) lo = vLo; }
+    if (precUpper && isFinite(precUpper[i])) { var vHi = v + precUpper[i]; if (vHi > hi) hi = vHi; }
+  }
+  if (fit) [fit.xMin, fit.xMax].forEach(function (xv) { var yv = fitY(xv); if (yv < lo) lo = yv; if (yv > hi) hi = yv; });
+  if (!isFinite(lo)) { lo = 0; hi = 1; }
+  if (lo === hi) { var dd = Math.abs(lo) * 0.1 || 1; lo -= dd; hi += dd; }
+  var padv = (hi - lo) * 0.08; lo -= padv; hi += padv;
+  var x0 = yrs[0] - 0.5, x1 = yrs[nYr - 1] + 0.5;
+  var xPix = function (xv) { return R.x + (xv - x0) / (x1 - x0) * R.w; };
+  var yPix = function (yv) { return R.y + (1 - (yv - lo) / (hi - lo)) * R.h; };
+  // gridlines + y ticks
+  axisStyle(ctx); ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
+  var nyt = 5;
+  for (var t = 0; t <= nyt; t++) {
+    var yval = lo + (hi - lo) * t / nyt, yy = yPix(yval);
+    ctx.strokeStyle = '#eee'; ctx.beginPath(); ctx.moveTo(R.x, yy); ctx.lineTo(R.x + R.w, yy); ctx.stroke();
+    ctx.strokeStyle = '#888'; ctx.beginPath(); ctx.moveTo(R.x - 3, yy); ctx.lineTo(R.x, yy); ctx.stroke();
+    ctx.fillStyle = '#333'; ctx.fillText(fmtNum(yval), R.x - 6, yy);
+  }
+  frame(ctx, R);
+  // x ticks
+  ctx.textAlign = 'center'; ctx.textBaseline = 'top'; ctx.strokeStyle = '#888'; ctx.fillStyle = '#333';
+  var step = Math.max(1, Math.ceil(nYr / 8));
+  for (var c = 0; c < nYr; c++) {
+    if (c % step !== 0 && c !== nYr - 1) continue;
+    var xx = xPix(yrs[c]);
+    ctx.beginPath(); ctx.moveTo(xx, R.y + R.h); ctx.lineTo(xx, R.y + R.h + 3); ctx.stroke();
+    ctx.fillText(String(Math.round(yrs[c])), xx, R.y + R.h + 5);
+  }
+  ctx.fillText('year', R.x + R.w / 2, R.y + R.h + 18);
+  ctx.save(); ctx.translate(14, R.y + R.h / 2); ctx.rotate(-Math.PI / 2); ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = '#333'; drawLabelWithSup(ctx, varLabel(), 0, 0, 'center'); ctx.restore();
+  var col = ramp(CMAPS[S.cmap], 0.7), lineColor = 'rgb(' + (col[0] | 0) + ',' + (col[1] | 0) + ',' + (col[2] | 0) + ')';
+  // OLS trend line, drawn only across [xMin,xMax] — the actual years it was fit
+  // to — never extrapolated beyond the data.
+  if (fit) {
+    ctx.strokeStyle = lineColor; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(xPix(fit.xMin), yPix(fitY(fit.xMin))); ctx.lineTo(xPix(fit.xMax), yPix(fitY(fit.xMax))); ctx.stroke();
+    ctx.lineWidth = 1;
+  }
+  // precision error bars (if the selected variable has per-year precision
+  // companions — see yearTrendPrecision), drawn as whiskers before the point
+  // markers so the markers sit on top. Additive magnitude, so bounds are
+  // mean − precLower and mean + precUpper; a side with no companion is simply
+  // not drawn (no arbitrary symmetric assumption).
+  if (mean && (precLower || precUpper)) {
+    ctx.strokeStyle = lineColor; ctx.lineWidth = 1;
+    var capHalf = 3;
+    for (i = 0; i < nYr; i++) {
+      var vBar = mean[i]; if (isNaN(vBar)) continue;
+      var hasLo = precLower && isFinite(precLower[i]), hasHi = precUpper && isFinite(precUpper[i]);
+      if (!hasLo && !hasHi) continue;
+      var xxBar = xPix(yrs[i]);
+      var yLoPix = yPix(hasLo ? vBar - precLower[i] : vBar), yHiPix = yPix(hasHi ? vBar + precUpper[i] : vBar);
+      ctx.beginPath(); ctx.moveTo(xxBar, yLoPix); ctx.lineTo(xxBar, yHiPix); ctx.stroke();
+      if (hasLo) { ctx.beginPath(); ctx.moveTo(xxBar - capHalf, yLoPix); ctx.lineTo(xxBar + capHalf, yLoPix); ctx.stroke(); }
+      if (hasHi) { ctx.beginPath(); ctx.moveTo(xxBar - capHalf, yHiPix); ctx.lineTo(xxBar + capHalf, yHiPix); ctx.stroke(); }
+    }
+  }
+  // year means as small squares (arc() is unavailable in the headless test stub)
+  if (mean) { ctx.fillStyle = lineColor; for (i = 0; i < nYr; i++) { var vv = mean[i]; if (isNaN(vv)) continue; ctx.fillRect(xPix(yrs[i]) - 2.5, yPix(vv) - 2.5, 5, 5); } }
+  // equation (coefficients shown inline as value ± 95% CI half-width) + r²/n
+  ctx.font = '11px sans-serif'; ctx.textBaseline = 'top';
+  if (fit) {
+    var halfB = fit.ciB[1] - fit.b, halfOffset = fit.ciOffset[1] - fit.offset;
+    var lines = [
+      'y = (' + fmtNum(fit.b) + ' ± ' + fmtNum(halfB) + ')·(year − ' + fmtNum(fit.mx) + ') + (' + fmtNum(fit.offset) + ' ± ' + fmtNum(halfOffset) + ')',
+      'r² = ' + fit.r2.toFixed(3) + ',  n = ' + fit.n
+    ];
+    ctx.textAlign = 'left'; ctx.fillStyle = '#222';
+    for (i = 0; i < lines.length; i++) ctx.fillText(lines[i], R.x + 8, R.y + 6 + i * 13);
+  } else {
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = '#888';
+    ctx.fillText('not enough years with data to fit a trend', R.x + R.w / 2, R.y + R.h / 2);
+  }
+}
+
 function varLabel(){ var v=S.model.vars[S.varName]; return v.name + (v.units?' ('+v.units+')':'') + (S.log?' [log]':''); }
 // Draw a label where unit exponents written as "^-2" or "^3" are rendered as
 // real superscripts (smaller, raised text) instead of the literal caret.
@@ -1851,11 +2051,21 @@ function drawLabelWithSup(ctx, text, x, y, align) {
 }
 function draw(){
   if(!S.model){ drawEmpty(); return; }
+  // Annual (5-D) product: two year panels sit above the main pair (they come
+  // first in the DOM). Drawing them here; the main panels then shrink 25%
+  // vertically to make room, per the layout request.
+  if (S.model.hasYear) {
+    var wy = Math.min(document.getElementById('yearDepthCanvas').parentElement.clientWidth,
+                      document.getElementById('yearTrendCanvas').parentElement.clientWidth);
+    var yearH = Math.max(240, Math.round(wy * 0.55));
+    drawYearDepth(yearH); drawYearTrend(yearH);
+  }
   // Shared height keeps the section and map panels' bottoms aligned instead
   // of each picking its own aspect ratio.
   var w = Math.min(document.getElementById('secCanvas').parentElement.clientWidth,
                     document.getElementById('mapCanvas').parentElement.clientWidth);
   var cssH = Math.max(300, Math.round(w * 0.7));
+  if (S.model.hasYear) cssH = Math.round(cssH * 0.75);   // shrink 25% vertically for the year panels above
   drawSection(cssH); drawMap(cssH);
   if (S.extraPanels) {
     var w2 = Math.min(document.getElementById('depthLatCanvas').parentElement.clientWidth,
@@ -2216,7 +2426,11 @@ document.getElementById('varSel').onchange = function(e){
 document.getElementById('cmapSel').onchange = function(e){ S.cmap = e.target.value; draw(); };
 document.getElementById('scaleSeg').onclick = function(e){ if(e.target.tagName!=='BUTTON')return; segSet('scaleSeg',e.target); S.log = e.target.dataset.v==='log'; recomputeAll(); };
 document.getElementById('missSeg').onclick = function(e){ if(e.target.tagName!=='BUTTON')return; segSet('missSeg',e.target); S.strict = e.target.dataset.v==='strict'; recomputeAll(); };
-document.getElementById('weightSel').onchange = function(e){ S.weightMode = e.target.value; recomputeAll(); };
+document.getElementById('weightSel').onchange = function(e){ S.weightMode = e.target.value;
+  // Annual product: the year-collapsed annual mean (and thus any condition mask
+  // built on it) depends on the weighting, so re-materialise it before recompute.
+  if (S.model && S.model.hasYear) { GVCore.applyYearCollapse(S.model, S.weightMode); recomputeKeep(); }
+  recomputeAll(); };
 document.getElementById('secProfiles').onchange = function(e){ S.secProfiles = e.target.checked; recomputeAll(); };
 document.getElementById('mapProfiles').onchange = function(e){ S.mapProfiles = e.target.checked; recomputeAll(); };
 document.getElementById('extraPanels').onchange = function(e){
