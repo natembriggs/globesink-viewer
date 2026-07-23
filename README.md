@@ -19,7 +19,14 @@ selection stays on each panel as a thin magenta rectangle.
 - **Built-in published datasets** (in `data/`): the dashboard opens on the
   smoothed climatology by default and offers a dropdown to switch to the raw
   climatology — both fetched directly from the site, no download step. You can
-  also **load your own NetCDF-4 file** from disk with the file picker.
+  also **load your own NetCDF-4 file** from disk — a single Dataset dropdown is
+  the only selector; "Choose file from your computer…" is just an entry in it
+  that opens the native file dialog (and reverts to whatever was already
+  loaded if you cancel, so it never sticks as a fake selection). Every file
+  you pick is cached for the session and gets its own dropdown entry under
+  "Your files", so switching back to one you loaded earlier reloads it
+  instantly with no repeat file dialog. A failed pick never leaves anything
+  stale on screen — the dropdown reverts and the previous dataset stays put.
   Switching datasets carries the current view over rather than resetting it:
   the chosen variable (if present in the new file) and the lat/lon and
   depth/month selections are kept, re-derived via their physical value ranges

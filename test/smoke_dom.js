@@ -36,7 +36,7 @@ function elStub(id) {
   var e = { id: id, value: '', innerHTML: '', textContent: '', className: '', checked: false, disabled: false,
     style: {}, dataset: {}, files: [], options: [],
     classList: { add: function () {}, remove: function () {} },
-    appendChild: function () {}, addEventListener: function () {},
+    appendChild: function () {}, insertBefore: function () {}, addEventListener: function () {}, click: function () {},
     getContext: function () { return e._ctx || (e._ctx = ctxStub()); },
     getBoundingClientRect: function () { return { left: 0, top: 0, width: 500, height: 360 }; },
     querySelectorAll: function () { return { forEach: function () {} }; } };
@@ -53,7 +53,17 @@ globalThis.document = {
   addEventListener: function () {}
 };
 globalThis.window = { devicePixelRatio: 2, addEventListener: function () {} };
-globalThis.FileReader = function () {};
+// Synchronous FileReader stub: reads a fake File-like {_buf} (or fails when
+// given {_fail:true}) immediately, so the fileIn.onchange handler can be
+// exercised directly without a real async file system.
+globalThis.FileReader = function () {
+  var self = this;
+  this.readAsArrayBuffer = function (f) {
+    if (f && f._fail) { self.error = { message: f._failMsg || 'read error' }; if (self.onerror) self.onerror(); }
+    else { self.result = f && f._buf; if (self.onload) self.onload(); }
+  };
+  this.abort = function () { if (self.onabort) self.onabort(); };
+};
 
 // synchronous fetch stub with a minimal chainable thenable
 function syncResolved(val) {
@@ -80,7 +90,7 @@ try {
   var m = html.match(/<script>([\s\S]*?)<\/script>\s*<\/body>/);
   if (!m) throw new Error('could not extract inline script');
   // strict-mode eval keeps declarations local, so expose what we need to assert on
-  eval(m[1] + '\n;globalThis.__gv = { S: S, recomputeAll: recomputeAll, recomputeKeep: recomputeKeep, loadModelFromBuffer: loadModelFromBuffer, loadPublished: loadPublished, panelRects: panelRects, landLoaded: function(){ return LAND != null; }, land: function(){ return LAND; }, csvSectionGrid: csvSectionGrid, csvMapLong: csvMapLong, jsonExport: jsonExport, draw: draw, buildRotatedAxis: buildRotatedAxis, axisPixelToDataCol: axisPixelToDataCol, wrapMod: wrapMod, secGeom: function(){ return secGeom; }, latMonthGeom: function(){ return latMonthGeom; }, depthLatGeom: function(){ return depthLatGeom; }, depthLatBox: depthLatBox, commitDepthLatBox: commitDepthLatBox, latMonthBox: latMonthBox, commitLatMonthBox: commitLatMonthBox, productSet: productSet, bboxRange: bboxRange, syncAnchors: syncAnchors, precisionToggleShown: function(){ return document.getElementById(\'autoPrecLabel\').style.display !== \'none\'; } };');
+  eval(m[1] + '\n;globalThis.__gv = { S: S, recomputeAll: recomputeAll, recomputeKeep: recomputeKeep, loadModelFromBuffer: loadModelFromBuffer, loadPublished: loadPublished, panelRects: panelRects, landLoaded: function(){ return LAND != null; }, land: function(){ return LAND; }, csvSectionGrid: csvSectionGrid, csvMapLong: csvMapLong, jsonExport: jsonExport, draw: draw, buildRotatedAxis: buildRotatedAxis, axisPixelToDataCol: axisPixelToDataCol, wrapMod: wrapMod, secGeom: function(){ return secGeom; }, latMonthGeom: function(){ return latMonthGeom; }, depthLatGeom: function(){ return depthLatGeom; }, depthLatBox: depthLatBox, commitDepthLatBox: commitDepthLatBox, latMonthBox: latMonthBox, commitLatMonthBox: commitLatMonthBox, productSet: productSet, bboxRange: bboxRange, syncAnchors: syncAnchors, precisionToggleShown: function(){ return document.getElementById(\'autoPrecLabel\').style.display !== \'none\'; }, loadCtl: loadCtl };');
   var G = globalThis.__gv, S = G.S;
   var recomputeAll = G.recomputeAll, recomputeKeep = G.recomputeKeep;
   // the app now starts blank; drive the file-load path directly
@@ -486,6 +496,61 @@ try {
     // a subsequent good load clears the error overlay
     G.loadModelFromBuffer(fb0.buffer.slice(fb0.byteOffset, fb0.byteOffset + fb0.byteLength), 'globesink_example.nc');
     chk('successful load hides the overlay', overlay.hidden === true);
+  })();
+
+  // "Choose file" is not a separate control — it's a "__pick__" entry in the
+  // dataset dropdown that triggers the native picker, and every file picked
+  // this session becomes its own reselectable dropdown entry (registerLocalFile
+  // / finishLocalLoad), so there is one dataset selector, not two, and a failed
+  // pick can never leave a stale filename showing anywhere.
+  (function () {
+    var sel = document.getElementById('datasetSel'), fileIn = document.getElementById('fileIn'), status = document.getElementById('status');
+    var goodBuf = fb0.buffer.slice(fb0.byteOffset, fb0.byteOffset + fb0.byteLength);
+
+    // a) "__pick__" is just a trigger: revert the visible selection to the
+    // last successfully-loaded dataset and open the native file dialog,
+    // rather than sticking as if it were itself a chosen dataset.
+    var clicked = false, realClick = fileIn.click;
+    fileIn.click = function () { clicked = true; };
+    var lastOk = G.loadCtl.lastOkDataset;
+    sel.value = '__pick__'; sel.onchange({ target: sel });
+    chk('"__pick__" reverts the dropdown to the last loaded dataset', sel.value === lastOk);
+    chk('"__pick__" opens the native file dialog', clicked === true);
+    fileIn.click = realClick;
+
+    // b) a fresh, good local file registers a reselectable dropdown entry
+    // and becomes the active dataset.
+    var nBefore = Object.keys(G.loadCtl.localFiles).length;
+    fileIn.files = [{ name: 'mine.nc', _buf: goodBuf }];
+    fileIn.onchange({ target: fileIn });
+    var newId = sel.value;
+    chk('fresh local file becomes the active dataset', /^__local__/.test(newId) && S.model.varNames.length > 0);
+    chk('fresh local file is cached under a new id', Object.keys(G.loadCtl.localFiles).length === nBefore + 1);
+    chk('cached entry keeps the original filename', G.loadCtl.localFiles[newId].name === 'mine.nc');
+    chk('cached entry becomes the last-ok dataset', G.loadCtl.lastOkDataset === newId);
+
+    // c) reselecting that cached file from the dropdown reloads it straight
+    // from the cached buffer — no FileReader involved this time.
+    G.loadModelFromBuffer(fb0.buffer.slice(fb0.byteOffset, fb0.byteOffset + fb0.byteLength), 'globesink_example.nc'); // switch away first
+    var realReader = globalThis.FileReader, readerUsed = false;
+    globalThis.FileReader = function () { readerUsed = true; return new realReader(); };
+    sel.value = newId; sel.onchange({ target: sel });
+    globalThis.FileReader = realReader;
+    chk('reselecting a cached local file reloads it', sel.value === newId && S.model.varNames.length > 0);
+    chk('reselecting a cached local file needs no FileReader', readerUsed === false);
+
+    // d) a bad local file pick fails cleanly: no dropdown entry is added, the
+    // selection reverts, and the failure is surfaced — the exact "stuck on
+    // a bad filename" bug this redesign removes.
+    var beforeBad = sel.value, nBeforeBad = Object.keys(G.loadCtl.localFiles).length;
+    fileIn.files = [{ name: 'bad.nc', _buf: new ArrayBuffer(16) }];
+    fileIn.onchange({ target: fileIn });
+    chk('a failed local file pick registers no dropdown entry', Object.keys(G.loadCtl.localFiles).length === nBeforeBad);
+    chk('a failed local file pick reverts the dropdown selection', sel.value === beforeBad);
+    chk('a failed local file pick surfaces an error', status.className === 'status-error' && /bad\.nc/.test(status.textContent));
+
+    // reload the synthetic file so later checks keep their known variables
+    G.loadModelFromBuffer(fb0.buffer.slice(fb0.byteOffset, fb0.byteOffset + fb0.byteLength), 'globesink_example.nc');
   })();
   // linked vs unlinked colour scales
   S.linkScales = true; recomputeAll();

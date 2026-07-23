@@ -63,9 +63,11 @@
           <option value="data/GLOBESINK_monthly_climatologies_smoothed_interpolated_minimal.nc">Smoothed climatology</option>
           <option value="data/GLOBESINK_monthly_climatologies_minimal.nc">Raw climatology</option>
         </optgroup>
+        <optgroup label="Local file" id="localPickGrp">
+          <option value="__pick__">Choose file from your computer…</option>
+        </optgroup>
       </select>
-      <span class="hint">or</span>
-      <input type="file" id="fileIn" accept=".nc">
+      <input type="file" id="fileIn" accept=".nc" style="display:none">
     </div>
     <div class="hint">Built-in files have 8 core variables — load your own NetCDF for the full set. Download latest full published dataset <a href="https://doi.org/10.5281/zenodo.19558504" target="_blank" rel="noopener">here</a>.</div>
   </div>
@@ -347,7 +349,9 @@ var loadCtl = {
   gen: 0,
   abort: null,          // AbortController for in-flight fetch, if available
   reader: null,         // FileReader for in-flight local file
-  lastOkDataset: null   // datasetSel value that matches the model currently on screen
+  lastOkDataset: null,  // datasetSel value that matches the model currently on screen
+  localFiles: {},        // id ("__local__N") -> {name, buf: ArrayBuffer}, cached for the session
+  localSeq: 0
 };
 
 function setStatus(t, kind) {
@@ -2083,23 +2087,52 @@ function loadPublished(url){
         (S.model ? ' — previous dataset kept on screen.' : ''), gen);
     });
 }
-// Reflect a user-loaded file in the dropdown (under its own group) so it's
-// clear which dataset is active.
-function markCustom(name){
+// Add a dropdown entry for a freshly-picked local file, in a "Your files"
+// group inserted just above the "choose file" trigger, and cache its buffer
+// so re-selecting it later in the session reloads it without a new file
+// dialog. Returns the new option's value.
+function registerLocalFile(name, buf) {
+  var id = '__local__' + (++loadCtl.localSeq);
+  loadCtl.localFiles[id] = { name: name, buf: buf };
   var sel = document.getElementById('datasetSel');
   var grp = document.getElementById('datasetCustomGrp');
-  if(!grp){
-    grp = document.createElement('optgroup'); grp.id = 'datasetCustomGrp'; grp.label = 'Your file';
-    var opt = document.createElement('option'); opt.value = '__custom__'; grp.appendChild(opt);
-    sel.appendChild(grp);
+  if (!grp) {
+    grp = document.createElement('optgroup'); grp.id = 'datasetCustomGrp'; grp.label = 'Your files';
+    sel.insertBefore(grp, document.getElementById('localPickGrp'));
   }
-  grp.firstChild.textContent = name;
-  sel.value = '__custom__';
-  loadCtl.lastOkDataset = '__custom__';
+  var opt = document.createElement('option'); opt.value = id; opt.textContent = name;
+  grp.appendChild(opt);
+  return id;
+}
+// Parse a NetCDF ArrayBuffer known to be from the user's own computer (a
+// fresh file pick, or reselecting one already cached this session from the
+// "Your files" group). Assumes beginLoad(name) already ran so `gen` is
+// current. `id` is the existing dropdown entry when reselecting; omit it for
+// a fresh pick, which registers a new one only on success.
+function finishLocalLoad(buf, name, gen, id) {
+  // Let the loading overlay paint before the parse blocks the main thread.
+  afterPaint(function () {
+    if (isStaleLoad(gen)) return;
+    if (loadModelFromBuffer(buf, name, name, gen)) {
+      var finalId = id || registerLocalFile(name, buf);
+      loadCtl.lastOkDataset = finalId;
+      document.getElementById('datasetSel').value = finalId;
+    }
+  });
 }
 document.getElementById('datasetSel').onchange = function(e){
-  if(e.target.value === '__custom__') return;       // already loaded
-  loadPublished(e.target.value);
+  var v = e.target.value;
+  if (v === '__pick__') {
+    // Not a real dataset — just the trigger for the native file dialog.
+    // Revert the visible selection immediately so "__pick__" never sticks
+    // (e.g. if the user cancels the dialog).
+    e.target.value = loadCtl.lastOkDataset != null ? loadCtl.lastOkDataset : e.target.options[0].value;
+    document.getElementById('fileIn').click();
+    return;
+  }
+  var cached = loadCtl.localFiles[v];
+  if (cached) { finishLocalLoad(cached.buf, cached.name, beginLoad(cached.name), v); return; }
+  loadPublished(v);
 };
 document.getElementById('fileIn').onchange = function(e){
   var f = e.target.files[0]; if (!f) return;
@@ -2109,12 +2142,7 @@ document.getElementById('fileIn').onchange = function(e){
   rd.onload = function () {
     if (isStaleLoad(gen)) return;
     loadCtl.reader = null;
-    var buf = rd.result;
-    // Let the loading overlay paint before the parse blocks the main thread.
-    afterPaint(function () {
-      if (isStaleLoad(gen)) return;
-      if (loadModelFromBuffer(buf, f.name, f.name, gen)) markCustom(f.name);
-    });
+    finishLocalLoad(rd.result, f.name, gen);
   };
   rd.onerror = function () {
     if (isStaleLoad(gen)) return;
@@ -2125,6 +2153,7 @@ document.getElementById('fileIn').onchange = function(e){
   };
   rd.onabort = function () { if (loadCtl.reader === rd) loadCtl.reader = null; };
   rd.readAsArrayBuffer(f);
+  e.target.value = '';  // allow re-picking the same filename later
 };
 document.getElementById('varSel').onchange = function(e){
   S.varName = e.target.value;
