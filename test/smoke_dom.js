@@ -219,6 +219,32 @@ try {
     S.secProfiles = true; S.mapProfiles = true; recomputeAll();
   })();
 
+  // Corner legend (drawUncertaintyLegend): the description text under the
+  // Variable selector no longer mentions the overlay line styles at all --
+  // that lives as a pictorial legend drawn in the otherwise-unused corner
+  // between each panel's top and side marginal panels, and only when that
+  // panel's own marginals are on for a variable that actually has companions.
+  (function () {
+    var secCtx = document.getElementById('secCanvas').getContext('2d');
+    var labels, realFillText = secCtx.fillText;
+    secCtx.fillText = function (text) { labels.push(text); return realFillText.apply(this, arguments); };
+
+    chk('variable description no longer mentions overlay line styles', !/dashed|systematic uncertainty \(thin\)/.test(document.getElementById('varDesc').textContent));
+
+    labels = []; S.secProfiles = true; recomputeAll(); G.draw();
+    chk('legend labels drawn when marginals are on and companions exist', labels.indexOf('precision') >= 0 && labels.indexOf('systematic') >= 0);
+
+    labels = []; S.secProfiles = false; recomputeAll(); G.draw();
+    chk('no legend labels drawn once marginals are off', labels.indexOf('precision') === -1 && labels.indexOf('systematic') === -1);
+    S.secProfiles = true; recomputeAll();
+
+    labels = []; S.varName = 'n_bbp'; recomputeAll(); G.draw();
+    chk('no legend labels for a variable without uncertainty companions', labels.indexOf('precision') === -1 && labels.indexOf('systematic') === -1);
+    S.varName = 'POC_flux'; recomputeAll();
+
+    secCtx.fillText = realFillText;
+  })();
+
   // extra panels below the main two: lat x depth and month x lat, averaged
   // over the ranges currently selected on the main panels
   S.extraPanels = true; recomputeAll();

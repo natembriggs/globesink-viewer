@@ -46,8 +46,11 @@ selection stays on each panel as a thin magenta rectangle.
   around the profile — `base − lower` and `base + upper` — in a paler tint of
   the line colour: precision as a dashed pair, systematic uncertainty as a thin
   solid pair. The two combine differently under the panel averaging, reflecting
-  their physics (see *Combining uncertainty under averaging* below). A note
-  under the variable dropdown says when these are available.
+  their physics (see *Combining uncertainty under averaging* below). A small
+  pictorial legend for these line styles is drawn in the otherwise-unused
+  corner between a panel's top and side marginal panels — it only appears (and
+  only costs that space) when that panel's marginals are on and the selected
+  variable actually has the corresponding companions.
 - **Optional extra panels:** two more heatmaps below the main two — latitude ×
   depth (left) and month × latitude (right) — at full size, without shrinking
   the main panels. They keep depth+latitude (or month+latitude) as full axes

@@ -284,17 +284,15 @@ function fmtLat(v){ return (Math.abs(v)).toFixed(0) + (v>=0?'°N':'°S'); }
 function fmtLon(v){ return (Math.abs(v)).toFixed(0) + (v>=0?'°E':'°W'); }
 function capitalize(s){ return s ? s.charAt(0).toUpperCase() + s.slice(1) : s; }
 // The full variable description (its NetCDF long_name), shown under the
-// selector for whichever variable is currently plotted.
+// selector for whichever variable is currently plotted. Precision/systematic
+// overlay info lives as a pictorial legend in the panels themselves instead
+// (see drawUncertaintyLegend) — it only costs space when marginal panels
+// (which is where it applies) are actually shown.
 function updateVarDesc(){
   var el = document.getElementById('varDesc');
   if (!S.model || !S.varName) { el.textContent = ''; return; }
   var desc = S.model.vars[S.varName].long_name;
-  var text = (desc && desc !== S.varName) ? capitalize(desc) : '';
-  var unc = companionUncVars(S.model, S.varName), bits = [];
-  if (unc.precision_lower || unc.precision_upper) bits.push('precision (dashed)');
-  if (unc.systematic_uncertainty_lower || unc.systematic_uncertainty_upper) bits.push('systematic uncertainty (thin)');
-  if (bits.length) text = (text ? text + ' — ' : '') + bits.join(' & ') + ' bounds shown on side panels.';
-  el.textContent = text;
+  el.textContent = (desc && desc !== S.varName) ? capitalize(desc) : '';
 }
 
 // ---------- carrying the current view across a dataset switch ----------
@@ -1470,6 +1468,32 @@ function profileUncColor(frac) {
   var mix = function (v) { return v + (255 - v) * frac; };
   return 'rgb(' + (mix(c[0]) | 0) + ',' + (mix(c[1]) | 0) + ',' + (mix(c[2]) | 0) + ')';
 }
+// Small pictorial legend for the precision/systematic overlay line styles
+// (dashed vs thin — see UNC_SPEC), drawn in the corner rect that panelRects
+// otherwise leaves blank between a panel's top and side marginal panels. Only
+// takes space when that panel's marginals are on (R is null otherwise) AND
+// the current variable actually has the corresponding companion.
+function drawUncertaintyLegend(ctx, R) {
+  if (!R) return;
+  var unc = companionUncVars(S.model, S.varName), rows = [];
+  if (unc.precision_lower || unc.precision_upper) rows.push({ label: 'precision', spec: UNC_SPEC.precision_upper });
+  if (unc.systematic_uncertainty_lower || unc.systematic_uncertainty_upper) rows.push({ label: 'systematic', spec: UNC_SPEC.systematic_uncertainty_upper });
+  if (!rows.length) return;
+  ctx.save();
+  ctx.font = '9px sans-serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+  var swatchLen = 16, pad = 4, lineH = Math.min(14, R.h / rows.length);
+  var y0 = R.y + R.h / 2 - (rows.length - 1) * lineH / 2;
+  rows.forEach(function (row, i) {
+    var y = y0 + i * lineH, x0 = R.x + pad, x1 = x0 + swatchLen;
+    ctx.strokeStyle = profileUncColor(0.5); ctx.lineWidth = row.spec.width;
+    ctx.setLineDash(row.spec.dash || []);
+    ctx.beginPath(); ctx.moveTo(x0, y); ctx.lineTo(x1, y); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = '#555';
+    ctx.fillText(row.label, x1 + pad, y);
+  });
+  ctx.restore();
+}
 
 // Outline the union boundary of a cell set: for each selected cell, draw only
 // the edges where the neighbour isn't also selected. Handles rectangles,
@@ -1531,6 +1555,7 @@ function drawSection(sharedH) {
     drawSideProfile(ctx, parts.side, S.secDepthArr, function(i){ return (yEdgePix(i)+yEdgePix(i+1))/2; }, S.secDepthLim, true, rcTD.rows, yEdgePix, nP, uncOverlayArrays(S.secUnc, 'depthArr'));
     drawPanelLabel(ctx, parts.top.x, parts.top.y, 'mean ' + depthRunsLabel(rcTD.rows));
     drawPanelLabel(ctx, parts.side.x, parts.side.y, 'mean ' + monthRunsLabel(rcTD.cols));
+    drawUncertaintyLegend(ctx, parts.corner);
   }
   // selection cells (depth=row, month=col) that drive the map + anchor marker
   drawCellSetOutline(ctx, S.boxTD.set, nM, monthAxis, yEdgePix);
@@ -1569,6 +1594,7 @@ function drawMap(sharedH) {
     drawSideProfile(ctx, parts.side, S.mapLatArr, function(i){ return (yEdgePix(i)+yEdgePix(i+1))/2; }, S.mapLatLim, false, rcLL.rows, yEdgePix, nY, uncOverlayArrays(S.mapUnc, 'latArr'));
     drawPanelLabel(ctx, parts.top.x, parts.top.y, 'mean ' + edgeRunsLabel(rcLL.rows, m.coords.latEdges, fmtLat));
     drawPanelLabel(ctx, parts.side.x, parts.side.y, 'mean ' + edgeRunsLabel(rcLL.cols, m.coords.lonEdges, fmtLon));
+    drawUncertaintyLegend(ctx, parts.corner);
   }
   // selection cells (lat=row, lon=col) that drive the section + anchor marker
   drawCellSetOutline(ctx, S.boxLL.set, nX, lonAxis, yEdgePix);
