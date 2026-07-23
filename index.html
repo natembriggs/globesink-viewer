@@ -46,7 +46,6 @@
   #loadOverlay.load-error::after { content:'  ✕'; opacity:.8; font-weight:400; }
   @keyframes gvspin { to { transform:rotate(360deg); } }
   .hint { color:var(--muted); font-size:11px; }
-  #varDesc { max-width:320px; }
   a { color:var(--accent); }
   .dlrow { text-align:center; margin-top:2px; }
   .dlrow .dl { padding:2px 8px; font-size:11px; margin:0 2px; border:1px solid var(--line); border-radius:5px; background:#fff; cursor:pointer; }
@@ -69,7 +68,8 @@
       </select>
       <input type="file" id="fileIn" accept=".nc" style="display:none">
     </div>
-    <div class="hint">Built-in files have 8 core variables — load your own NetCDF for the full set. Download latest full published dataset <a href="https://doi.org/10.5281/zenodo.19558504" target="_blank" rel="noopener">here</a>.</div>
+    <div class="hint">Built-in files have 8 core variables — load your own NetCDF for the full set.</div>
+    <div class="hint">Download latest full published dataset <a href="https://doi.org/10.5281/zenodo.19558504" target="_blank" rel="noopener">here</a>.</div>
   </div>
   <div class="grp"><label>Variable</label><select id="varSel"></select>
     <div class="hint" id="varDesc"></div>
@@ -293,6 +293,14 @@ function updateVarDesc(){
   if (!S.model || !S.varName) { el.textContent = ''; return; }
   var desc = S.model.vars[S.varName].long_name;
   el.textContent = (desc && desc !== S.varName) ? capitalize(desc) : '';
+  syncVarDescWidth();
+}
+// Wrap the variable description to the Variable selector's own rendered
+// width (which varies with the selected option's text) rather than a fixed
+// guess. Re-run on resize too, in case that changes the select's width.
+function syncVarDescWidth(){
+  var sel = document.getElementById('varSel'), el = document.getElementById('varDesc');
+  if (sel.offsetWidth) el.style.maxWidth = sel.offsetWidth + 'px';
 }
 
 // ---------- carrying the current view across a dataset switch ----------
@@ -992,7 +1000,7 @@ function downloadPanel(plot, fmt){
 }
 
 // ---------- drawing ----------
-var MARG = { l: 54, r: 78, t: 10, b: 34 };  // r leaves room for colorbar
+var MARG = { l: 54, r: 78, t: 10, b: 40 };  // r leaves room for colorbar; b room for the (11px) axis unit label below the tick numbers
 var PROFILE_GAP = 14;  // px between main heatmap and marginal panels, so axis tick labels don't collide
 function setupCanvas(cv, cssW, cssH) {
   var dpr = window.devicePixelRatio || 1;
@@ -1196,7 +1204,7 @@ function drawTopProfile(ctx, R, values, axis, lim, selIdx, uncArrays) {
   drawProfilePathXY(ctx, R, pts.xs, pts.ys, yPix);
   ctx.textAlign='right'; ctx.textBaseline='middle';
   [0,0.5,1].forEach(function(f){ var yy=R.y+(1-f)*R.h; ctx.beginPath();ctx.moveTo(R.x-3,yy);ctx.lineTo(R.x,yy);ctx.stroke();ctx.fillText(fmtNum(valueAtFrac(lim,f)),R.x-5,yy); });
-  ctx.save(); ctx.translate(11,R.y+R.h/2); ctx.rotate(-Math.PI/2); ctx.textBaseline='middle'; ctx.font='9px sans-serif'; drawLabelWithSup(ctx, varLabel(), 0, 0, 'center'); ctx.restore();
+  ctx.save(); ctx.translate(13,R.y+R.h/2); ctx.rotate(-Math.PI/2); ctx.textBaseline='middle'; ctx.font='11px sans-serif'; drawLabelWithSup(ctx, varLabel(), 0, 0, 'center'); ctx.restore();
 }
 function drawSideProfile(ctx, R, values, yCenter, lim, isDepthProfile, selIdx, yEdgePix, nRows, uncArrays) {
   frame(ctx, R); axisStyle(ctx);
@@ -1219,7 +1227,7 @@ function drawSideProfile(ctx, R, values, yCenter, lim, isDepthProfile, selIdx, y
   ctx.stroke(); ctx.restore();
   ctx.textAlign='center'; ctx.textBaseline='top';
   [0.08,0.5,0.92].forEach(function(f){ var xx=R.x+f*R.w; ctx.beginPath();ctx.moveTo(xx,R.y+R.h);ctx.lineTo(xx,R.y+R.h+3);ctx.stroke();ctx.fillText(fmtNum(valueAtFrac(lim,f)),xx,R.y+R.h+5); });
-  ctx.font='9px sans-serif'; ctx.fillStyle='#333'; drawLabelWithSup(ctx, varLabel(), R.x+R.w/2, R.y+R.h+18, 'center');
+  ctx.font='11px sans-serif'; ctx.fillStyle='#333'; drawLabelWithSup(ctx, varLabel(), R.x+R.w/2, R.y+R.h+20, 'center');
 }
 // Fit and draw a Martin power-law curve (flux = B*(z/100)^-b) to flux data
 // below 150m. Draw the fit line in black and write the equation.
@@ -1285,7 +1293,7 @@ function drawMartinCurve(ctx, R, depthArr, model, yCenter, lim, xPix) {
 // unambiguously as that one panel's label, not a shared caption.
 function drawPanelLabel(ctx, x, panelTop, text) {
   ctx.save();
-  ctx.fillStyle = '#51565d'; ctx.font = '10px sans-serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'bottom';
+  ctx.fillStyle = '#51565d'; ctx.font = '11px sans-serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'bottom';
   ctx.fillText(text, x, panelTop - 3);
   ctx.restore();
 }
@@ -1477,20 +1485,37 @@ function drawUncertaintyLegend(ctx, R) {
   if (!R) return;
   var unc = companionUncVars(S.model, S.varName), rows = [];
   if (unc.precision_lower || unc.precision_upper) rows.push({ label: 'precision', spec: UNC_SPEC.precision_upper });
-  if (unc.systematic_uncertainty_lower || unc.systematic_uncertainty_upper) rows.push({ label: 'systematic', spec: UNC_SPEC.systematic_uncertainty_upper });
+  if (unc.systematic_uncertainty_lower || unc.systematic_uncertainty_upper) rows.push({ label: 'systematic uncertainty', spec: UNC_SPEC.systematic_uncertainty_upper });
   if (!rows.length) return;
   ctx.save();
-  ctx.font = '9px sans-serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
-  var swatchLen = 16, pad = 4, lineH = Math.min(14, R.h / rows.length);
-  var y0 = R.y + R.h / 2 - (rows.length - 1) * lineH / 2;
-  rows.forEach(function (row, i) {
-    var y = y0 + i * lineH, x0 = R.x + pad, x1 = x0 + swatchLen;
+  ctx.font = '11px sans-serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle'; ctx.fillStyle = '#555';
+  var swatchLen = 14, pad = 4, lineH = 13;
+  // The corner is small and "systematic uncertainty" doesn't fit it on one
+  // line at a readable size, so wrap each label's words to whatever width is
+  // actually available (measured, not guessed, so this holds at any corner
+  // size/DPI) rather than shrinking the font back down.
+  var textMaxW = Math.max(20, R.w - swatchLen - pad * 3);
+  var wrapped = rows.map(function (row) {
+    var words = row.label.split(' '), lines = [], cur = '';
+    words.forEach(function (word) {
+      var trial = cur ? cur + ' ' + word : word;
+      if (cur && ctx.measureText(trial).width > textMaxW) { lines.push(cur); cur = word; }
+      else cur = trial;
+    });
+    if (cur) lines.push(cur);
+    return { spec: row.spec, lines: lines };
+  });
+  var totalLines = wrapped.reduce(function (n, w) { return n + w.lines.length; }, 0);
+  var y = R.y + Math.max(0, (R.h - totalLines * lineH) / 2) + lineH / 2;
+  wrapped.forEach(function (row) {
+    var x0 = R.x + pad, x1 = x0 + swatchLen;
     ctx.strokeStyle = profileUncColor(0.5); ctx.lineWidth = row.spec.width;
     ctx.setLineDash(row.spec.dash || []);
     ctx.beginPath(); ctx.moveTo(x0, y); ctx.lineTo(x1, y); ctx.stroke();
     ctx.setLineDash([]);
     ctx.fillStyle = '#555';
-    ctx.fillText(row.label, x1 + pad, y);
+    row.lines.forEach(function (line, i) { ctx.fillText(line, x1 + pad, y + i * lineH); });
+    y += row.lines.length * lineH;
   });
   ctx.restore();
 }
@@ -2214,7 +2239,7 @@ document.addEventListener('click', function(e){
   var b = e.target && e.target.closest ? e.target.closest('.dl') : null;
   if (b) downloadPanel(b.getAttribute('data-plot'), b.getAttribute('data-fmt'));
 });
-window.addEventListener('resize', function(){ draw(); });
+window.addEventListener('resize', function(){ draw(); syncVarDescWidth(); });
 
 initInteraction();
 loadLand();

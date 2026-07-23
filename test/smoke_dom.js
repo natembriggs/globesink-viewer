@@ -233,6 +233,7 @@ try {
 
     labels = []; S.secProfiles = true; recomputeAll(); G.draw();
     chk('legend labels drawn when marginals are on and companions exist', labels.indexOf('precision') >= 0 && labels.indexOf('systematic') >= 0);
+    chk('systematic legend says "uncertainty" too (wrapped word, not abbreviated)', labels.indexOf('uncertainty') >= 0);
 
     labels = []; S.secProfiles = false; recomputeAll(); G.draw();
     chk('no legend labels drawn once marginals are off', labels.indexOf('precision') === -1 && labels.indexOf('systematic') === -1);
