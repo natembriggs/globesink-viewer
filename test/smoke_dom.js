@@ -33,8 +33,8 @@ function ctxStub() {
 }
 globalThis.Path2D = function () { this.moveTo = function () {}; this.lineTo = function () {}; this.closePath = function () {}; };
 function elStub(id) {
-  var e = { id: id, value: '', innerHTML: '', textContent: '', checked: false, disabled: false,
-    style: {}, dataset: {}, files: [],
+  var e = { id: id, value: '', innerHTML: '', textContent: '', className: '', checked: false, disabled: false,
+    style: {}, dataset: {}, files: [], options: [],
     classList: { add: function () {}, remove: function () {} },
     appendChild: function () {}, addEventListener: function () {},
     getContext: function () { return e._ctx || (e._ctx = ctxStub()); },
@@ -460,6 +460,28 @@ try {
   chk('published grid 25x45x45x12', S.model.sizes.depth === 25 && S.model.sizes.lat === 45 && S.model.sizes.month === 12);
   // reload the synthetic file so later checks keep their known variables
   G.loadModelFromBuffer(fb0.buffer.slice(fb0.byteOffset, fb0.byteOffset + fb0.byteLength), 'globesink_example.nc');
+  // load robustness: a stale, failed, or empty load must never overwrite or
+  // blank a good model on screen, and a failure must be surfaced to the user.
+  (function () {
+    var good = S.model, goodVar = S.varName, status = document.getElementById('status');
+    // a) a result superseded by a newer load (gen != current) is dropped
+    var interp = readFile('example_data/globesink_example_interpolated.nc', 'binary');
+    var okBuf = interp.buffer.slice(interp.byteOffset, interp.byteOffset + interp.byteLength);
+    var staleRet = G.loadModelFromBuffer(okBuf, 'interp.nc', 'interp.nc', 999); // 999 != loadCtl.gen
+    chk('stale load returns false and keeps the current model', staleRet === false && S.model === good);
+    // b) a parse failure keeps the previous model and reports an error
+    var badRet = G.loadModelFromBuffer(new ArrayBuffer(32), 'broken.nc');
+    chk('failed load returns false and keeps the current model', badRet === false && S.model === good);
+    chk('failed load surfaces an error status', status.className === 'status-error' && /broken\.nc/.test(status.textContent));
+    // c) a file that parses but has no 4-D variables is a failure, not a blank model
+    var realParse = GVCore.parseNetCDF;
+    GVCore.parseNetCDF = function () { return { varNames: [], sizes: { depth: 1, lat: 1, lon: 1, month: 1 }, coords: {} }; };
+    var emptyRet = G.loadModelFromBuffer(new ArrayBuffer(8), 'empty.nc');
+    GVCore.parseNetCDF = realParse;
+    chk('empty (no 4-D vars) load returns false and keeps the current model', emptyRet === false && S.model === good);
+    chk('empty load surfaces an error status', status.className === 'status-error' && /No 4-D variables/.test(status.textContent));
+    chk('carried variable intact after the failed loads', S.varName === goodVar);
+  })();
   // linked vs unlinked colour scales
   S.linkScales = true; recomputeAll();
   chk('linked: secLim == mapLim', S.secLim[0] === S.mapLim[0] && S.secLim[1] === S.mapLim[1]);

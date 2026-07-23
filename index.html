@@ -29,6 +29,9 @@
   .panelwrap h3 { margin:0 0 4px; font-size:13px; font-weight:600; text-align:center; }
   canvas { width:100%; height:auto; display:block; touch-action:none; cursor:crosshair; }
   #status { padding:6px 14px; border-top:1px solid var(--line); color:var(--muted); font-size:12px; min-height:26px; }
+  #status.status-loading { color:var(--ink); font-weight:600; }
+  #status.status-error { color:#b42318; font-weight:600; }
+  #status.status-ok { color:var(--muted); font-weight:normal; }
   .hint { color:var(--muted); font-size:11px; }
   #varDesc { max-width:320px; }
   a { color:var(--accent); }
@@ -321,17 +324,82 @@ function remapBox(rowRanges, colRanges, rowEdges, colEdges, NC) {
 }
 
 // ---------- data loading ----------
-function loadModelFromBuffer(ab, name, source) {
+// Coordinate concurrent published fetches and local FileReader loads so a
+// slow older request cannot overwrite a newer choice. `gen` is a monotonic
+// token; optional AbortController aborts the previous fetch when a new load
+// starts (FileReader is aborted the same way).
+var loadCtl = {
+  gen: 0,
+  abort: null,          // AbortController for in-flight fetch, if available
+  reader: null,         // FileReader for in-flight local file
+  lastOkDataset: null   // datasetSel value that matches the model currently on screen
+};
+
+function setStatus(t, kind) {
+  var el = document.getElementById('status');
+  el.textContent = t;
+  el.className = kind ? 'status-' + kind : '';
+}
+function isStaleLoad(gen) { return gen != null && gen !== loadCtl.gen; }
+function isAbortError(e) {
+  return !!(e && (e.name === 'AbortError' || /aborted/i.test(String(e.message || ''))));
+}
+// Start a new load: bump generation, cancel anything in flight, show a clear
+// loading state. Only blank the canvases when there is no previous model to keep.
+function beginLoad(label) {
+  loadCtl.gen += 1;
+  if (loadCtl.abort) {
+    try { loadCtl.abort.abort(); } catch (e) { /* ignore */ }
+    loadCtl.abort = null;
+  }
+  if (loadCtl.reader) {
+    try { loadCtl.reader.abort(); } catch (e) { /* ignore */ }
+    loadCtl.reader = null;
+  }
+  setStatus('Loading ' + label + ' …', 'loading');
+  if (!S.model) drawEmpty('Loading ' + label + ' …');
+  return loadCtl.gen;
+}
+// Surface a load failure without wiping a working view. Reverts the dataset
+// dropdown to whatever is actually drawn when we still have a good model.
+function loadFailed(msg, gen) {
+  if (isStaleLoad(gen)) return;
+  setStatus(msg, 'error');
+  if (!S.model) {
+    drawEmpty(msg);
+  }
+  if (loadCtl.lastOkDataset != null) {
+    var sel = document.getElementById('datasetSel');
+    // only restore if the option still exists (custom file may have been removed)
+    var ok = false;
+    for (var i = 0; i < sel.options.length; i++) {
+      if (sel.options[i].value === loadCtl.lastOkDataset) { ok = true; break; }
+    }
+    if (ok) sel.value = loadCtl.lastOkDataset;
+  }
+}
+
+// Parse a NetCDF ArrayBuffer into S.model. Optional `gen` rejects stale results
+// from a superseded load; omit it for direct/synchronous callers (tests).
+// Returns true on success, false on failure or stale.
+function loadModelFromBuffer(ab, name, source, gen) {
+  if (isStaleLoad(gen)) return false;
   try {
     var model = GVCore.parseNetCDF(ab, name);
+    if (isStaleLoad(gen)) return false;
     model.source = source || name;
     // Capture the view (variable + selections) before it's overwritten, so a
     // dataset switch (e.g. smoothed <-> raw climatology) can carry it over
     // instead of resetting to the whole-globe / annual-mean default.
     var prevModel = S.model, prevVarName = S.varName, prevBoxLL = S.boxLL, prevBoxTD = S.boxTD,
       prevMonthOffset = S.monthOffset, prevLonOffset = S.lonOffset;
+    // No plottable 4-D variables: leave any previous model/view untouched.
+    if (!model.varNames.length) {
+      loadFailed('No 4-D variables found in ' + name +
+        (prevModel ? ' — previous dataset kept on screen.' : ''), gen);
+      return false;
+    }
     S.model = model;
-    if (!model.varNames.length) { setStatus('No 4-D variables found in ' + name); return; }
     // variable dropdown — core variables first, then the rest; each alphabetical
     var sortedNames = model.varNames.slice().sort(function (a, b) { return a.toLowerCase().localeCompare(b.toLowerCase()); });
     var core = sortedNames.filter(function (n) { return CORE_VARS.indexOf(n) >= 0; });
@@ -394,12 +462,15 @@ function loadModelFromBuffer(ab, name, source) {
     rebuildCondVarOptions();
     recomputeKeep();
     recomputeAll();
+    // Setup is synchronous after the stale check above, so this result is current.
     setStatus('Loaded ' + name + ' — ' + model.varNames.length + ' variables, grid ' +
       model.sizes.depth + '×' + model.sizes.lat + '×' + model.sizes.lon + '×' + model.sizes.month +
-      ' (depth×lat×lon×month).');
+      ' (depth×lat×lon×month).', 'ok');
+    return true;
   } catch (e) {
-    setStatus('Failed to read ' + name + ': ' + e.message);
-    throw e;
+    loadFailed('Failed to read ' + name + ': ' + e.message +
+      (S.model ? ' — previous dataset kept on screen.' : ''), gen);
+    return false;
   }
 }
 
@@ -1939,14 +2010,35 @@ function renderConds() {
 function applyConds(){ recomputeKeep(); recomputeAll(); }
 
 // ---------- wiring ----------
-function setStatus(t){ document.getElementById('status').textContent = t; }
 // Fetch a repo-hosted (published) dataset and load it — no user download step.
 function loadPublished(url){
-  if(!url){ drawEmpty(); return; }
-  setStatus('Loading ' + url.split('/').pop() + ' …');
-  fetch(url).then(function(r){ if(!r.ok) throw new Error('HTTP ' + r.status); return r.arrayBuffer(); })
-    .then(function(ab){ loadModelFromBuffer(ab, url.split('/').pop(), url); })
-    .catch(function(e){ setStatus('Could not load ' + url + ': ' + e.message); drawEmpty(); });
+  if (!url) {
+    if (!S.model) drawEmpty();
+    setStatus('No dataset selected.', 'error');
+    return;
+  }
+  var name = url.split('/').pop();
+  var gen = beginLoad(name);
+  var ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+  loadCtl.abort = ctrl;
+  var opts = ctrl ? { signal: ctrl.signal } : {};
+  fetch(url, opts)
+    .then(function (r) {
+      if (isStaleLoad(gen)) return null;
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.arrayBuffer();
+    })
+    .then(function (ab) {
+      if (ab == null || isStaleLoad(gen)) return;
+      if (loadModelFromBuffer(ab, name, url, gen)) {
+        loadCtl.lastOkDataset = url;
+      }
+    })
+    .catch(function (e) {
+      if (isStaleLoad(gen) || isAbortError(e)) return;
+      loadFailed('Could not load ' + name + ': ' + e.message +
+        (S.model ? ' — previous dataset kept on screen.' : ''), gen);
+    });
 }
 // Reflect a user-loaded file in the dropdown (under its own group) so it's
 // clear which dataset is active.
@@ -1960,14 +2052,31 @@ function markCustom(name){
   }
   grp.firstChild.textContent = name;
   sel.value = '__custom__';
+  loadCtl.lastOkDataset = '__custom__';
 }
 document.getElementById('datasetSel').onchange = function(e){
   if(e.target.value === '__custom__') return;       // already loaded
   loadPublished(e.target.value);
 };
 document.getElementById('fileIn').onchange = function(e){
-  var f = e.target.files[0]; if(!f) return; setStatus('Reading '+f.name+' …');
-  var rd = new FileReader(); rd.onload = function(){ loadModelFromBuffer(rd.result, f.name, f.name); markCustom(f.name); }; rd.readAsArrayBuffer(f);
+  var f = e.target.files[0]; if (!f) return;
+  var gen = beginLoad(f.name);
+  var rd = new FileReader();
+  loadCtl.reader = rd;
+  rd.onload = function () {
+    if (isStaleLoad(gen)) return;
+    loadCtl.reader = null;
+    if (loadModelFromBuffer(rd.result, f.name, f.name, gen)) markCustom(f.name);
+  };
+  rd.onerror = function () {
+    if (isStaleLoad(gen)) return;
+    loadCtl.reader = null;
+    var detail = (rd.error && rd.error.message) ? rd.error.message : 'read error';
+    loadFailed('Could not read ' + f.name + ': ' + detail +
+      (S.model ? ' — previous dataset kept on screen.' : ''), gen);
+  };
+  rd.onabort = function () { if (loadCtl.reader === rd) loadCtl.reader = null; };
+  rd.readAsArrayBuffer(f);
 };
 document.getElementById('varSel').onchange = function(e){
   S.varName = e.target.value;
@@ -2006,7 +2115,6 @@ window.addEventListener('resize', function(){ draw(); });
 
 initInteraction();
 loadLand();
-drawEmpty('Loading published dataset…');
 loadPublished(document.getElementById('datasetSel').value);  // default: smoothed climatology
 </script>
 </body>
