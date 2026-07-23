@@ -32,6 +32,19 @@
   #status.status-loading { color:var(--ink); font-weight:600; }
   #status.status-error { color:#b42318; font-weight:600; }
   #status.status-ok { color:var(--muted); font-weight:normal; }
+  /* Centre-screen load feedback: a synchronous NetCDF parse blocks the main
+     thread, so this is painted (via a forced reflow) before the parse starts. */
+  #loadOverlay { position:fixed; top:50%; left:50%; transform:translate(-50%,-50%);
+    z-index:60; max-width:80vw; padding:14px 22px; border-radius:10px; font-size:15px;
+    font-weight:600; text-align:center; box-shadow:0 6px 24px rgba(0,0,0,.22); }
+  #loadOverlay[hidden] { display:none; }
+  #loadOverlay.load-loading { background:#1f2937; color:#fff; }
+  #loadOverlay.load-loading::before { content:''; display:inline-block; width:14px; height:14px;
+    margin-right:9px; vertical-align:-2px; border:2px solid rgba(255,255,255,.35);
+    border-top-color:#fff; border-radius:50%; animation:gvspin .7s linear infinite; }
+  #loadOverlay.load-error { background:#b42318; color:#fff; cursor:pointer; }
+  #loadOverlay.load-error::after { content:'  ✕'; opacity:.8; font-weight:400; }
+  @keyframes gvspin { to { transform:rotate(360deg); } }
   .hint { color:var(--muted); font-size:11px; }
   #varDesc { max-width:320px; }
   a { color:var(--accent); }
@@ -108,6 +121,8 @@
   </div>
   <div id="condList"></div>
 </div>
+
+<div id="loadOverlay" hidden></div>
 
 <div id="plots">
   <div class="panelwrap">
@@ -340,6 +355,29 @@ function setStatus(t, kind) {
   el.textContent = t;
   el.className = kind ? 'status-' + kind : '';
 }
+// Prominent centre-screen load feedback (the thin status bar is easy to miss).
+// kind: 'loading' (spinner, auto-cleared on completion) or 'error' (red,
+// click to dismiss).
+function showOverlay(msg, kind) {
+  var el = document.getElementById('loadOverlay');
+  if (!el) return;
+  el.textContent = msg;
+  el.className = 'load-' + kind;
+  el.onclick = (kind === 'error') ? hideOverlay : null;
+  el.hidden = false;
+}
+function hideOverlay() {
+  var el = document.getElementById('loadOverlay');
+  if (el) el.hidden = true;
+}
+// Yield to the browser so a just-set loading state actually paints before the
+// synchronous NetCDF parse seizes the main thread. Double rAF guarantees a
+// paint has happened; with no rAF (headless tests) run straight away so the
+// load stays synchronous.
+function afterPaint(fn) {
+  if (typeof requestAnimationFrame === 'function') requestAnimationFrame(function () { requestAnimationFrame(fn); });
+  else fn();
+}
 function isStaleLoad(gen) { return gen != null && gen !== loadCtl.gen; }
 function isAbortError(e) {
   return !!(e && (e.name === 'AbortError' || /aborted/i.test(String(e.message || ''))));
@@ -357,6 +395,7 @@ function beginLoad(label) {
     loadCtl.reader = null;
   }
   setStatus('Loading ' + label + ' …', 'loading');
+  showOverlay('Loading ' + label + ' …', 'loading');
   if (!S.model) drawEmpty('Loading ' + label + ' …');
   return loadCtl.gen;
 }
@@ -365,6 +404,7 @@ function beginLoad(label) {
 function loadFailed(msg, gen) {
   if (isStaleLoad(gen)) return;
   setStatus(msg, 'error');
+  showOverlay(msg, 'error');
   if (!S.model) {
     drawEmpty(msg);
   }
@@ -463,6 +503,7 @@ function loadModelFromBuffer(ab, name, source, gen) {
     recomputeKeep();
     recomputeAll();
     // Setup is synchronous after the stale check above, so this result is current.
+    hideOverlay();
     setStatus('Loaded ' + name + ' — ' + model.varNames.length + ' variables, grid ' +
       model.sizes.depth + '×' + model.sizes.lat + '×' + model.sizes.lon + '×' + model.sizes.month +
       ' (depth×lat×lon×month).', 'ok');
@@ -2030,9 +2071,11 @@ function loadPublished(url){
     })
     .then(function (ab) {
       if (ab == null || isStaleLoad(gen)) return;
-      if (loadModelFromBuffer(ab, name, url, gen)) {
-        loadCtl.lastOkDataset = url;
-      }
+      // Let the loading overlay paint before the parse blocks the main thread.
+      afterPaint(function () {
+        if (isStaleLoad(gen)) return;
+        if (loadModelFromBuffer(ab, name, url, gen)) loadCtl.lastOkDataset = url;
+      });
     })
     .catch(function (e) {
       if (isStaleLoad(gen) || isAbortError(e)) return;
@@ -2066,7 +2109,12 @@ document.getElementById('fileIn').onchange = function(e){
   rd.onload = function () {
     if (isStaleLoad(gen)) return;
     loadCtl.reader = null;
-    if (loadModelFromBuffer(rd.result, f.name, f.name, gen)) markCustom(f.name);
+    var buf = rd.result;
+    // Let the loading overlay paint before the parse blocks the main thread.
+    afterPaint(function () {
+      if (isStaleLoad(gen)) return;
+      if (loadModelFromBuffer(buf, f.name, f.name, gen)) markCustom(f.name);
+    });
   };
   rd.onerror = function () {
     if (isStaleLoad(gen)) return;

@@ -463,7 +463,8 @@ try {
   // load robustness: a stale, failed, or empty load must never overwrite or
   // blank a good model on screen, and a failure must be surfaced to the user.
   (function () {
-    var good = S.model, goodVar = S.varName, status = document.getElementById('status');
+    var good = S.model, goodVar = S.varName, status = document.getElementById('status'),
+      overlay = document.getElementById('loadOverlay');
     // a) a result superseded by a newer load (gen != current) is dropped
     var interp = readFile('example_data/globesink_example_interpolated.nc', 'binary');
     var okBuf = interp.buffer.slice(interp.byteOffset, interp.byteOffset + interp.byteLength);
@@ -473,6 +474,7 @@ try {
     var badRet = G.loadModelFromBuffer(new ArrayBuffer(32), 'broken.nc');
     chk('failed load returns false and keeps the current model', badRet === false && S.model === good);
     chk('failed load surfaces an error status', status.className === 'status-error' && /broken\.nc/.test(status.textContent));
+    chk('failed load shows the error overlay', overlay.hidden === false && /load-error/.test(overlay.className));
     // c) a file that parses but has no 4-D variables is a failure, not a blank model
     var realParse = GVCore.parseNetCDF;
     GVCore.parseNetCDF = function () { return { varNames: [], sizes: { depth: 1, lat: 1, lon: 1, month: 1 }, coords: {} }; };
@@ -481,6 +483,9 @@ try {
     chk('empty (no 4-D vars) load returns false and keeps the current model', emptyRet === false && S.model === good);
     chk('empty load surfaces an error status', status.className === 'status-error' && /No 4-D variables/.test(status.textContent));
     chk('carried variable intact after the failed loads', S.varName === goodVar);
+    // a subsequent good load clears the error overlay
+    G.loadModelFromBuffer(fb0.buffer.slice(fb0.byteOffset, fb0.byteOffset + fb0.byteLength), 'globesink_example.nc');
+    chk('successful load hides the overlay', overlay.hidden === true);
   })();
   // linked vs unlinked colour scales
   S.linkScales = true; recomputeAll();
