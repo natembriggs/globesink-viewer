@@ -1,0 +1,16 @@
+{
+  "id": "./",
+  "name": "GLOBESINK Viewer",
+  "short_name": "GLOBESINK",
+  "description": "Explore global ocean particle and carbon flux climatologies from BGC-Argo.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#10334a",
+  "icons": [
+    { "src": "assets/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "assets/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "assets/icons/icon-1024.png", "sizes": "1024x1024", "type": "image/png", "purpose": "any" }
+  ]
+}

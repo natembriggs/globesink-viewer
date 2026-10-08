@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+<title>GLOBESINK — globe and sinking ocean particles</title>
+<rect x="16" y="16" width="480" height="480" rx="104" fill="#10334a"/>
+<ellipse cx="256.0" cy="256.0" rx="168.0" ry="168.0" fill="none" stroke="#f1fbff" stroke-width="18"/>
+<path d="M174 256 A82 168 0 0 1 338 256" fill="none" stroke="#5bd6c8" stroke-width="10"/>
+<polyline points="108,185 404,185" fill="none" stroke="#5bd6c8" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+<polyline points="97,256 415,256" fill="none" stroke="#f1fbff" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+<ellipse cx="204.0" cy="292.0" rx="9.0" ry="9.0" fill="#5bd6c8" stroke="none" stroke-width="1"/>
+<ellipse cx="308.0" cy="292.0" rx="9.0" ry="9.0" fill="#5bd6c8" stroke="none" stroke-width="1"/>
+<ellipse cx="212.0" cy="330.0" rx="8.0" ry="8.0" fill="#5bd6c8" stroke="none" stroke-width="1"/>
+<ellipse cx="300.0" cy="330.0" rx="8.0" ry="8.0" fill="#5bd6c8" stroke="none" stroke-width="1"/>
+<polyline points="256,288 256,376" fill="none" stroke="#f1fbff" stroke-width="18" stroke-linecap="round" stroke-linejoin="round"/>
+<polyline points="224,344 256,376 288,344" fill="none" stroke="#f1fbff" stroke-width="18" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

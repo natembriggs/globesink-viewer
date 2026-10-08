@@ -191,6 +191,20 @@ dependency is the vendored pure-JavaScript HDF5 reader in `vendor/`. (Opening
 overlay is fetched at run time and browsers block that over `file://`, so http
 is recommended.)
 
+## Website and Mac app icon
+
+The browser tab and installed Chrome app use the globe-and-sinking-particles
+icon in `assets/icons/`. `manifest.webmanifest` supplies the app name, icons,
+and standalone window settings. All URLs are relative, including when hosted
+under a GitHub Pages project path.
+
+In Chrome, open the hosted viewer and choose **Install page as app** from
+the **Cast, save and share** menu. If an existing shortcut keeps its old icon,
+remove that app shortcut and install it again from the refreshed page.
+This adds an app window and icon; it does not add offline support.
+
+To rebuild the icons, run `python3 tools/make_icons.py` (requires Pillow).
+
 ## What files it expects
 
 GLOBESINK NetCDF variables are 4-D over `depth`, `lat`, `lon`, `month`
