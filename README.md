@@ -118,6 +118,25 @@ selection stays on each panel as a thin magenta rectangle.
 - **Land overlay:** a 50 m coastline (islands down to ~Kerguelen) is drawn over
   the map, masking the data under land.
 
+## Comparing two datasets
+
+**Compare with** loads a second file on the same grid (same depth, latitude, longitude and month
+cells; e.g. two versions of the product). The page then switches to a three-column layout:
+
+- **Left two columns:** dataset 1's section and map on top, dataset 2's below, each at two thirds
+  of the usual width and half the usual height. All four share one selection: clicking, dragging,
+  shift/⌘-clicking, the arrow keys and axis panning on any of them update the other three.
+  Dataset 2 uses dataset 1's conditions mask and the same weighting, so the same cells are compared.
+  The sections share one colour scale, and the maps share another, even when panels are unlinked.
+- **Right column:** a 1 vs 2 regression of the **map cells** (lat × lon, averaged over the
+  selected months and depths) or the **section cells** (month × depth, averaged over the selected
+  area), with the 1:1 line, the least-squares line (in log₁₀ space on a log scale), r², n and the
+  median 2/1 ratio. **Clicking a point outlines its cell** on both datasets' panels and shows its
+  position and both values in the title; clicking empty space clears it.
+
+Marginal and extra panels are dataset-1 views and are switched off while comparing. A file on
+another grid is refused (the comparison in place is kept).
+
 ## Annual (5-D) product
 
 The published climatology is 4-D (`[depth, lat, lon, month]`). A parallel

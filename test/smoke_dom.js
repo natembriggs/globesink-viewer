@@ -25,7 +25,7 @@ function ctxStub() {
   var noop = function () {};
   return { setTransform: noop, clearRect: noop, fillRect: noop, strokeRect: noop,
     beginPath: noop, moveTo: noop, lineTo: noop, stroke: noop, fill: noop, fillText: noop,
-    rect: noop, clip: noop, closePath: noop, setLineDash: noop,
+    rect: noop, arc: noop, clip: noop, closePath: noop, setLineDash: noop,
     save: noop, restore: noop, translate: noop, rotate: noop, scale: noop,
     measureText: function (s) { return { width: (s || '').length * 6 }; },
     createLinearGradient: function () { return { addColorStop: noop }; },
@@ -35,7 +35,7 @@ globalThis.Path2D = function () { this.moveTo = function () {}; this.lineTo = fu
 function elStub(id) {
   var e = { id: id, value: '', innerHTML: '', textContent: '', className: '', checked: false, disabled: false,
     style: {}, dataset: {}, files: [], options: [],
-    classList: { add: function () {}, remove: function () {} },
+    classList: { add: function () {}, remove: function () {}, toggle: function () {} },
     appendChild: function () {}, insertBefore: function () {}, addEventListener: function () {}, click: function () {},
     getContext: function () { return e._ctx || (e._ctx = ctxStub()); },
     getBoundingClientRect: function () { return { left: 0, top: 0, width: 500, height: 360 }; },
@@ -90,7 +90,7 @@ try {
   var m = html.match(/<script>([\s\S]*?)<\/script>\s*<\/body>/);
   if (!m) throw new Error('could not extract inline script');
   // strict-mode eval keeps declarations local, so expose what we need to assert on
-  eval(m[1] + '\n;globalThis.__gv = { S: S, recomputeAll: recomputeAll, recomputeKeep: recomputeKeep, loadModelFromBuffer: loadModelFromBuffer, loadPublished: loadPublished, panelRects: panelRects, landLoaded: function(){ return LAND != null; }, land: function(){ return LAND; }, csvSectionGrid: csvSectionGrid, csvMapLong: csvMapLong, jsonExport: jsonExport, draw: draw, buildRotatedAxis: buildRotatedAxis, axisPixelToDataCol: axisPixelToDataCol, wrapMod: wrapMod, secGeom: function(){ return secGeom; }, latMonthGeom: function(){ return latMonthGeom; }, depthLatGeom: function(){ return depthLatGeom; }, depthLatBox: depthLatBox, commitDepthLatBox: commitDepthLatBox, latMonthBox: latMonthBox, commitLatMonthBox: commitLatMonthBox, productSet: productSet, bboxRange: bboxRange, syncAnchors: syncAnchors, precisionToggleShown: function(){ return document.getElementById(\'autoPrecLabel\').style.display !== \'none\'; }, loadCtl: loadCtl };');
+  eval(m[1] + '\n;globalThis.__gv = { S: S, recomputeAll: recomputeAll, recomputeKeep: recomputeKeep, loadModelFromBuffer: loadModelFromBuffer, loadPublished: loadPublished, panelRects: panelRects, landLoaded: function(){ return LAND != null; }, land: function(){ return LAND; }, csvSectionGrid: csvSectionGrid, csvMapLong: csvMapLong, jsonExport: jsonExport, draw: draw, buildRotatedAxis: buildRotatedAxis, axisPixelToDataCol: axisPixelToDataCol, wrapMod: wrapMod, secGeom: function(){ return secGeom; }, latMonthGeom: function(){ return latMonthGeom; }, depthLatGeom: function(){ return depthLatGeom; }, depthLatBox: depthLatBox, commitDepthLatBox: commitDepthLatBox, latMonthBox: latMonthBox, commitLatMonthBox: commitLatMonthBox, productSet: productSet, bboxRange: bboxRange, syncAnchors: syncAnchors, precisionToggleShown: function(){ return document.getElementById(\'autoPrecLabel\').style.display !== \'none\'; }, loadCtl: loadCtl, setModel2FromBuffer: setModel2FromBuffer, cmpCtl: cmpCtl, compareOn: compareOn, regressionPoints: regressionPoints, regGeom: function(){ return regGeom; }, regressionClick: regressionClick, secGeom2: function(){ return secGeom2; }, mapGeom2: function(){ return mapGeom2; }, loadCompare: loadCompare };');
   var G = globalThis.__gv, S = G.S;
   var recomputeAll = G.recomputeAll, recomputeKeep = G.recomputeKeep;
   // the app now starts blank; drive the file-load path directly
@@ -605,6 +605,34 @@ try {
 
   // ---- annual (5-D) product: year collapse + the two year panels ----
   S.conditions = [];   // clear the stale n_profiles>=40 condition from the 4-D checks above
+  // ---- compare mode: dataset 2 on the same grid ----
+  (function () {
+    G.loadModelFromBuffer(fb0.buffer.slice(fb0.byteOffset, fb0.byteOffset + fb0.byteLength), 'globesink_example.nc');
+    var b2 = fb0.buffer.slice(fb0.byteOffset, fb0.byteOffset + fb0.byteLength);
+    G.setModel2FromBuffer(b2, 'copy.nc', 'copy.nc', 'copy', ++G.cmpCtl.gen);
+    chk('compare mode on for the same grid', G.compareOn() && S.secArr2 && S.mapArr2);
+    chk('dataset 2 arrays equal dataset 1 for an identical file',
+      Array.prototype.every.call(S.mapArr, function (v, i) { return (isNaN(v) && isNaN(S.mapArr2[i])) || v === S.mapArr2[i]; }));
+    G.draw();
+    chk('dataset 2 panels drawn', !!G.secGeom2() && !!G.mapGeom2());
+    var P = G.regressionPoints();
+    chk('regression: one point per map cell with values', P.kind === 'map' && P.pts.length > 0 && P.pts.every(function (p) { return p.x === p.y; }));
+    var g = G.regGeom(), q = g.pts[0];
+    G.regressionClick({ clientX: q.x, clientY: q.y });
+    chk('clicking a regression point highlights its cell', S.cmpHL && S.cmpHL.kind === 'map' && S.cmpHL.r === q.p.r && S.cmpHL.c === q.p.c);
+    S.regMode = 'section'; S.cmpHL = null; G.draw();
+    chk('regression on section cells', G.regressionPoints().kind === 'section');
+    S.log = true; recomputeAll(); G.draw(); S.log = false;
+    chk('log-scale regression ok', G.regressionPoints().pts.every(function (p) { return p.x > 0 && p.y > 0; }));
+    S.regMode = 'map';
+    var fi2 = readFile('example_data/globesink_example_interpolated.nc', 'binary');
+    G.setModel2FromBuffer(fi2.buffer.slice(fi2.byteOffset, fi2.byteOffset + fi2.byteLength), 'interp.nc', 'interp.nc', 'interp', ++G.cmpCtl.gen);
+    chk('a dataset on another grid is refused and the comparison kept', G.compareOn() && S.model2.source === 'copy.nc');
+    G.loadCompare('');
+    chk('compare mode off', !G.compareOn() && S.secArr2 === null);
+    G.draw();
+  })();
+
   var fb5 = readFile('example_data/globesink_example_5d.nc', 'binary');
   G.loadModelFromBuffer(fb5.buffer.slice(fb5.byteOffset, fb5.byteOffset + fb5.byteLength), 'globesink_example_5d.nc');
   var s5 = S.model.sizes, base5 = s5.depth * s5.lat * s5.lon * s5.month;
