@@ -36,8 +36,8 @@
   .datasetOption { display:flex; align-items:center; gap:8px; width:100%; text-align:left; border:0; }
   .datasetOption:hover, .datasetOption:focus-visible { background:var(--panel); }
   .datasetBadge { display:inline-flex; justify-content:center; min-width:30px; font-weight:700; color:var(--accent); }
-  .datasetPath { color:var(--muted); overflow-wrap:anywhere; }
-  .datasetPathEdit { border:0; font-size:11px; color:var(--muted); white-space:nowrap; }
+  .datasetDetail { color:var(--muted); overflow-wrap:anywhere; }
+  .datasetDetailEdit { border:0; font-size:11px; color:var(--muted); white-space:nowrap; }
   .range-in { width:74px; }
   #conds { padding:6px 14px; border-bottom:1px solid var(--line); background:var(--panel); }
   .condsRow { display:flex; align-items:center; justify-content:space-between; gap:10px; }
@@ -2655,9 +2655,17 @@ function loadPublished(url){
 // group inserted just above the "choose file" trigger, and cache its buffer
 // so re-selecting it later in the session reloads it without a new file
 // dialog. Returns the new option's value.
-function registerLocalFile(name, buf, path) {
+function registerLocalFile(name, buf, path, attrs, file) {
   var id = '__local__' + (++loadCtl.localSeq);
-  loadCtl.localFiles[id] = { name: name, buf: buf, path: path || '' };
+  var cached = { name:name, buf:buf, path:path || '', autoLabel:localDatasetMetadata(attrs, file), file:file, label:null, fingerprint:'' };
+  loadCtl.localFiles[id] = cached;
+  // A content hash distinguishes versions even if metadata and filenames match.
+  if (typeof crypto !== 'undefined' && crypto.subtle) {
+    crypto.subtle.digest('SHA-256', buf).then(function(hash) {
+      cached.fingerprint = Array.from(new Uint8Array(hash)).slice(0, 6).map(function(b) { return b.toString(16).padStart(2, '0'); }).join('');
+      renderDatasetPicker();
+    }).catch(function() { /* Metadata / file timestamp remain usable if hashing is unavailable. */ });
+  }
   var sel = document.getElementById('datasetSel');
   var grp = document.getElementById('datasetCustomGrp');
   if (!grp) {
@@ -2682,12 +2690,12 @@ function registerLocalFile(name, buf, path) {
 // "Your files" group). Assumes beginLoad(name) already ran so `gen` is
 // current. `id` is the existing dropdown entry when reselecting; omit it for
 // a fresh pick, which registers a new one only on success.
-function finishLocalLoad(buf, name, gen, id, path) {
+function finishLocalLoad(buf, name, gen, id, path, file) {
   // Let the loading overlay paint before the parse blocks the main thread.
   afterPaint(function () {
     if (isStaleLoad(gen)) return;
     if (loadModelFromBuffer(buf, name, name, gen)) {
-      var finalId = id || registerLocalFile(name, buf, path);
+      var finalId = id || registerLocalFile(name, buf, path, S.model.globalAttrs, file);
       loadCtl.lastOkDataset = finalId;
       document.getElementById('datasetSel').value = finalId;
       renderDatasetPicker();
@@ -2716,7 +2724,7 @@ document.getElementById('fileIn').onchange = function(e){
   rd.onload = function () {
     if (isStaleLoad(gen)) return;
     loadCtl.reader = null;
-    finishLocalLoad(rd.result, f.name, gen, null, localFilePath(f));
+    finishLocalLoad(rd.result, f.name, gen, null, localFilePath(f), f);
   };
   rd.onerror = function () {
     if (isStaleLoad(gen)) return;
@@ -2773,13 +2781,40 @@ function localFilePath(file) {
   // Standard browser file inputs deliberately hide absolute filesystem paths.
   return file.path || file.webkitRelativePath || '';
 }
+function localDatasetMetadata(attrs, file) {
+  attrs = attrs || {};
+  function first(keys) {
+    for (var i = 0; i < keys.length; i++) {
+      var value = attrs[keys[i]];
+      if (value != null && String(value).trim()) return String(value).trim();
+    }
+    return '';
+  }
+  var id = first(['tracking_id', 'uuid', 'id', 'dataset_id', 'identifier']);
+  var created = first(['date_created', 'creation_date', 'date_of_creation', 'created', 'creation_time']);
+  if (!created && attrs.history) {
+    // GLOBESINK's MATLAB export records creation on the first history line.
+    var match = String(attrs.history).match(/creat[^\r\n]*?(\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?)/i);
+    if (match) created = match[1];
+  }
+  var parts = [];
+  if (id) parts.push('ID: ' + id);
+  if (created) parts.push('Created ' + created);
+  if (!parts.length && file && file.lastModified > 0) parts.push('File modified ' + new Date(file.lastModified).toISOString());
+  if (!parts.length && attrs.title) parts.push(String(attrs.title));
+  return parts.join(' · ');
+}
+function localDatasetLabel(file) {
+  if (file.label !== null) return file.label;
+  return [file.autoLabel, file.fingerprint ? 'SHA-256: ' + file.fingerprint : ''].filter(Boolean).join(' · ') || 'Local file';
+}
 function datasetEntries() {
   return [
     { id:'data/GLOBESINK_monthly_climatologies_smoothed_interpolated_minimal.nc', name:'Smoothed climatology' },
     { id:'data/GLOBESINK_monthly_climatologies_minimal.nc', name:'Raw climatology' }
   ].concat(Object.keys(loadCtl.localFiles).map(function(id) {
     var f = loadCtl.localFiles[id];
-    return { id:id, name:f.name, path:f.path, local:true };
+    return { id:id, name:f.name, path:f.path, label:localDatasetLabel(f), local:true };
   }));
 }
 function datasetSlot(id) {
@@ -2810,23 +2845,23 @@ function renderDatasetPicker() {
     var wrap = document.createElement('div'); wrap.className = 'datasetRow';
     var b = document.createElement('button'); b.type = 'button'; b.className = 'datasetOption';
     var slot = datasetSlot(entry.id);
-    b.setAttribute('aria-label', entry.name + (entry.path ? ' — ' + entry.path : '') + (slot ? ', dataset ' + slot : ''));
+    b.setAttribute('aria-label', entry.name + (entry.label ? ' — ' + entry.label : '') + (slot ? ', dataset ' + slot : ''));
     var badge = document.createElement('span'); badge.className = 'datasetBadge'; badge.textContent = slot;
     b.appendChild(badge);
     var name = document.createElement('span'); name.textContent = entry.name; b.appendChild(name);
     if (entry.local) {
-      var path = document.createElement('span'); path.className = 'datasetPath';
-      path.textContent = '— ' + (entry.path || 'folder path unavailable'); b.appendChild(path);
+      var path = document.createElement('span'); path.className = 'datasetDetail';
+      path.textContent = '— ' + entry.label; b.appendChild(path);
     }
     b.onclick = function(e) { chooseDataset(entry.id, e.metaKey || e.ctrlKey); };
     wrap.appendChild(b);
     if (entry.local) {
-      var edit = document.createElement('button'); edit.type = 'button'; edit.className = 'datasetPathEdit';
-      edit.textContent = entry.path ? 'Edit path…' : 'Add path…';
-      edit.setAttribute('aria-label', 'Set path label for ' + entry.name);
+      var edit = document.createElement('button'); edit.type = 'button'; edit.className = 'datasetDetailEdit';
+      edit.textContent = 'Edit label…';
+      edit.setAttribute('aria-label', 'Edit dataset label for ' + entry.name);
       edit.onclick = function() {
-        var path = window.prompt('Folder or full path for ' + entry.name + ' (label only; saved for this session):', entry.path || '');
-        if (path !== null) { loadCtl.localFiles[entry.id].path = path.trim(); renderDatasetPicker(); document.getElementById('datasetToggle').focus(); }
+        var label = window.prompt('Label for ' + entry.name + ' (saved for this session). Leave blank to restore the automatic label:', entry.label);
+        if (label !== null) { loadCtl.localFiles[entry.id].label = label.trim() || null; renderDatasetPicker(); document.getElementById('datasetToggle').focus(); }
       };
       wrap.appendChild(edit);
     }
@@ -2879,6 +2914,7 @@ function setModel2FromBuffer(ab, name, source, value, gen) {
     if (m2.hasYear) GVCore.applyYearCollapse(m2, S.weightMode);
     if (S.model && !sameGrid(S.model, m2)) throw new Error('not on dataset 1\'s grid (' + m2.sizes.depth + '×' + m2.sizes.lat + '×' + m2.sizes.lon + '×' + m2.sizes.month + ')');
     S.model2 = m2; S.cmpHL = null; cmpCtl.last = value;
+    if (loadCtl.localFiles[value]) loadCtl.localFiles[value].autoLabel = localDatasetMetadata(m2.globalAttrs, loadCtl.localFiles[value].file);
     document.getElementById('cmpSel').value = value;
     renderDatasetPicker();
     hideOverlay();
@@ -2918,7 +2954,7 @@ document.getElementById('cmpFileIn').onchange = function (e) {
   showOverlay('Reading dataset 2: ' + f.name + '…', 'loading');
   rd.onload = function () {
     if (gen !== cmpCtl.gen) return;
-    var id = registerLocalFile(f.name, rd.result, localFilePath(f));
+    var id = registerLocalFile(f.name, rd.result, localFilePath(f), null, f);
     afterPaint(function () { setModel2FromBuffer(rd.result, f.name, f.name, id, gen); });
   };
   rd.onerror = function () { if (gen !== cmpCtl.gen) return; hideOverlay(); setStatus('Dataset 2: could not read ' + f.name, 'error'); };

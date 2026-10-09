@@ -126,10 +126,16 @@ click on dataset 2 to remove it, or use "Remove dataset 2" in the menu. Numbered
 badges identify each selection when the dropdown is open. The same shortcuts work
 on "Choose file from your computer…" to load a new file into either slot.
 
-Local filenames are followed by their paths only in the open menu; the closed
-control stays compact. Browsers usually withhold absolute paths. Where no path
-is available, "Add path…" lets you label the file with its folder or full path
-for this session; "Edit path…" updates it. Duplicate filenames stay separate.
+Local filenames are followed by automatic labels only in the open menu; the
+closed control stays compact. Labels use a metadata identifier (`tracking_id`,
+`uuid`, `id`, `dataset_id`, or `identifier`) and creation timestamp when present.
+Creation dates can also be read from the MATLAB `history` entry. Without those,
+labels use the file's modification time, or its metadata title. A short SHA-256
+fingerprint of the file contents is appended where browser hashing is available
+(HTTPS or localhost), so different versions can be distinguished even when their
+metadata matches. Identical file contents have the same fingerprint.
+"Edit label…" overrides the label for this session; clearing it restores the
+automatic label. Editing labels does not change the NetCDF file.
 
 The second file must use the same grid (same depth, latitude, longitude and month
 cells; e.g. two versions of the product). The page then switches to a three-column layout:

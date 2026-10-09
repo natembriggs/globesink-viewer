@@ -92,7 +92,7 @@ try {
   var m = html.match(/<script>([\s\S]*?)<\/script>\s*<\/body>/);
   if (!m) throw new Error('could not extract inline script');
   // strict-mode eval keeps declarations local, so expose what we need to assert on
-  eval(m[1] + '\n;globalThis.__gv = { S: S, recomputeAll: recomputeAll, recomputeKeep: recomputeKeep, loadModelFromBuffer: loadModelFromBuffer, loadPublished: loadPublished, panelRects: panelRects, landLoaded: function(){ return LAND != null; }, land: function(){ return LAND; }, csvSectionGrid: csvSectionGrid, csvMapLong: csvMapLong, jsonExport: jsonExport, draw: draw, buildRotatedAxis: buildRotatedAxis, axisPixelToDataCol: axisPixelToDataCol, wrapMod: wrapMod, secGeom: function(){ return secGeom; }, latMonthGeom: function(){ return latMonthGeom; }, depthLatGeom: function(){ return depthLatGeom; }, depthLatBox: depthLatBox, commitDepthLatBox: commitDepthLatBox, latMonthBox: latMonthBox, commitLatMonthBox: commitLatMonthBox, productSet: productSet, bboxRange: bboxRange, syncAnchors: syncAnchors, precisionToggleShown: function(){ return document.getElementById(\'autoPrecLabel\').style.display !== \'none\'; }, loadCtl: loadCtl, setModel2FromBuffer: setModel2FromBuffer, cmpCtl: cmpCtl, compareOn: compareOn, regressionPoints: regressionPoints, regGeom: function(){ return regGeom; }, regressionClick: regressionClick, secGeom2: function(){ return secGeom2; }, mapGeom2: function(){ return mapGeom2; }, loadCompare: loadCompare, chooseDataset: chooseDataset, datasetSlot: datasetSlot, datasetEntries: datasetEntries, renderDatasetPicker: renderDatasetPicker };');
+  eval(m[1] + '\n;globalThis.__gv = { S: S, recomputeAll: recomputeAll, recomputeKeep: recomputeKeep, loadModelFromBuffer: loadModelFromBuffer, loadPublished: loadPublished, panelRects: panelRects, landLoaded: function(){ return LAND != null; }, land: function(){ return LAND; }, csvSectionGrid: csvSectionGrid, csvMapLong: csvMapLong, jsonExport: jsonExport, draw: draw, buildRotatedAxis: buildRotatedAxis, axisPixelToDataCol: axisPixelToDataCol, wrapMod: wrapMod, secGeom: function(){ return secGeom; }, latMonthGeom: function(){ return latMonthGeom; }, depthLatGeom: function(){ return depthLatGeom; }, depthLatBox: depthLatBox, commitDepthLatBox: commitDepthLatBox, latMonthBox: latMonthBox, commitLatMonthBox: commitLatMonthBox, productSet: productSet, bboxRange: bboxRange, syncAnchors: syncAnchors, precisionToggleShown: function(){ return document.getElementById(\'autoPrecLabel\').style.display !== \'none\'; }, loadCtl: loadCtl, setModel2FromBuffer: setModel2FromBuffer, cmpCtl: cmpCtl, compareOn: compareOn, regressionPoints: regressionPoints, regGeom: function(){ return regGeom; }, regressionClick: regressionClick, secGeom2: function(){ return secGeom2; }, mapGeom2: function(){ return mapGeom2; }, loadCompare: loadCompare, chooseDataset: chooseDataset, datasetSlot: datasetSlot, datasetEntries: datasetEntries, renderDatasetPicker: renderDatasetPicker, localDatasetMetadata: localDatasetMetadata, localDatasetLabel: localDatasetLabel };');
   var G = globalThis.__gv, S = G.S;
   var recomputeAll = G.recomputeAll, recomputeKeep = G.recomputeKeep;
   // the app now starts blank; drive the file-load path directly
@@ -591,7 +591,16 @@ try {
     fileIn.onchange({ target: fileIn });
     var duplicateId = G.loadCtl.lastOkDataset;
     chk('duplicate filenames retain distinct entries', duplicateId !== newId && G.loadCtl.localFiles[newId].name === G.loadCtl.localFiles[duplicateId].name);
-    chk('local path retained for open menu', G.datasetEntries().filter(function(e) { return e.id === duplicateId; })[0].path === '/another/folder/mine.nc');
+    chk('metadata title labels files without dates', G.datasetEntries().filter(function(e) { return e.id === duplicateId; })[0].label === S.model.globalAttrs.title);
+    chk('metadata identifier and creation date used', G.localDatasetMetadata({ tracking_id:'run-123', date_created:'2026-10-09T12:00:00Z' }) === 'ID: run-123 · Created 2026-10-09T12:00:00Z');
+    chk('MATLAB history creation date extracted', G.localDatasetMetadata({ history:'Created in MATLAB on 2026-07-15 18:52:32\n2026-07-15 19:02:08 : Appended metadata' }) === 'Created 2026-07-15 18:52:32');
+    chk('file modification time is a fallback', G.localDatasetMetadata({}, {lastModified:Date.UTC(2026,9,9)}) === 'File modified 2026-10-09T00:00:00.000Z');
+    var file = G.loadCtl.localFiles[duplicateId]; file.fingerprint = 'abcdef123456';
+    chk('fingerprint appended to automatic label', /SHA-256: abcdef123456$/.test(G.localDatasetLabel(file)));
+    file.label = 'My run'; G.renderDatasetPicker();
+    chk('edited label overrides automatic label', G.datasetEntries().filter(function(e) { return e.id === duplicateId; })[0].label === 'My run');
+    file.label = null;
+    chk('clearing override restores automatic label', /SHA-256: abcdef123456$/.test(G.localDatasetLabel(file)));
     chk('closed selector excludes local paths', document.getElementById('datasetSummary').textContent === 'mine.nc');
 
     // reload the synthetic file so later checks keep their known variables
