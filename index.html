@@ -22,6 +22,22 @@
   .seg { display:inline-flex; border:1px solid var(--line); border-radius:5px; overflow:hidden; }
   .seg button { border:0; border-radius:0; padding:4px 9px; background:#fff; }
   .seg button.on { background:var(--ink); color:#fff; }
+  .datasetPicker { position:relative; width:280px; max-width:calc(100vw - 28px); }
+  #datasetToggle { width:100%; display:flex; gap:8px; align-items:center; text-align:left; }
+  #datasetSummary { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  #datasetMenu { position:absolute; top:100%; left:0; z-index:70; width:max-content;
+    min-width:100%; max-width:calc(100vw - 28px); max-height:65vh; overflow:auto;
+    background:white; border:1px solid var(--line); border-radius:6px; padding:6px;
+    box-shadow:0 5px 18px #0003; }
+  #datasetMenu[hidden] { display:none; }
+  .datasetHelp, .datasetGroup { padding:5px 8px; font-size:11px; color:var(--muted); }
+  .datasetGroup { font-weight:600; }
+  .datasetRow { display:flex; align-items:center; }
+  .datasetOption { display:flex; align-items:center; gap:8px; width:100%; text-align:left; border:0; }
+  .datasetOption:hover, .datasetOption:focus-visible { background:var(--panel); }
+  .datasetBadge { display:inline-flex; justify-content:center; min-width:30px; font-weight:700; color:var(--accent); }
+  .datasetPath { color:var(--muted); overflow-wrap:anywhere; }
+  .datasetPathEdit { border:0; font-size:11px; color:var(--muted); white-space:nowrap; }
   .range-in { width:74px; }
   #conds { padding:6px 14px; border-bottom:1px solid var(--line); background:var(--panel); }
   .condsRow { display:flex; align-items:center; justify-content:space-between; gap:10px; }
@@ -73,9 +89,16 @@
 <body>
 <header>
   <div class="grp">
-    <label>Dataset</label>
+    <label id="datasetLabel">Datasets</label>
+    <div class="datasetPicker" id="datasetPicker">
+      <button id="datasetToggle" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="datasetMenu" aria-labelledby="datasetLabel datasetSummary"><span id="datasetSummary">Smoothed climatology</span><span aria-hidden="true">▾</span></button>
+      <div id="datasetMenu" role="dialog" aria-label="Choose datasets" hidden>
+        <div class="datasetHelp">Click: dataset 1 · ⌘/Ctrl-click: dataset 2 (click again to remove)</div>
+        <div id="datasetOptions"></div>
+      </div>
+    </div>
     <div style="display:flex;gap:8px;align-items:center">
-      <select id="datasetSel">
+      <select id="datasetSel" hidden aria-hidden="true">
         <optgroup label="Built-in — core variables only">
           <option value="data/GLOBESINK_monthly_climatologies_smoothed_interpolated_minimal.nc">Smoothed climatology</option>
           <option value="data/GLOBESINK_monthly_climatologies_minimal.nc">Raw climatology</option>
@@ -89,7 +112,7 @@
     <div class="hint">Built-in files have 8 core variables — load your own NetCDF for the full set.</div>
     <div class="hint">Download latest full published dataset <a href="https://doi.org/10.5281/zenodo.19558504" target="_blank" rel="noopener">here</a>.</div>
   </div>
-  <div class="grp">
+  <div hidden>
     <label>Compare with</label>
     <select id="cmpSel">
       <option value="">— none —</option>
@@ -2619,7 +2642,7 @@ function loadPublished(url){
       // Let the loading overlay paint before the parse blocks the main thread.
       afterPaint(function () {
         if (isStaleLoad(gen)) return;
-        if (loadModelFromBuffer(ab, name, url, gen)) loadCtl.lastOkDataset = url;
+        if (loadModelFromBuffer(ab, name, url, gen)) { loadCtl.lastOkDataset = url; renderDatasetPicker(); }
       });
     })
     .catch(function (e) {
@@ -2632,9 +2655,9 @@ function loadPublished(url){
 // group inserted just above the "choose file" trigger, and cache its buffer
 // so re-selecting it later in the session reloads it without a new file
 // dialog. Returns the new option's value.
-function registerLocalFile(name, buf) {
+function registerLocalFile(name, buf, path) {
   var id = '__local__' + (++loadCtl.localSeq);
-  loadCtl.localFiles[id] = { name: name, buf: buf };
+  loadCtl.localFiles[id] = { name: name, buf: buf, path: path || '' };
   var sel = document.getElementById('datasetSel');
   var grp = document.getElementById('datasetCustomGrp');
   if (!grp) {
@@ -2651,6 +2674,7 @@ function registerLocalFile(name, buf) {
   }
   var copt = document.createElement('option'); copt.value = id; copt.textContent = name;
   cgrp.appendChild(copt);
+  renderDatasetPicker();
   return id;
 }
 // Parse a NetCDF ArrayBuffer known to be from the user's own computer (a
@@ -2658,14 +2682,15 @@ function registerLocalFile(name, buf) {
 // "Your files" group). Assumes beginLoad(name) already ran so `gen` is
 // current. `id` is the existing dropdown entry when reselecting; omit it for
 // a fresh pick, which registers a new one only on success.
-function finishLocalLoad(buf, name, gen, id) {
+function finishLocalLoad(buf, name, gen, id, path) {
   // Let the loading overlay paint before the parse blocks the main thread.
   afterPaint(function () {
     if (isStaleLoad(gen)) return;
     if (loadModelFromBuffer(buf, name, name, gen)) {
-      var finalId = id || registerLocalFile(name, buf);
+      var finalId = id || registerLocalFile(name, buf, path);
       loadCtl.lastOkDataset = finalId;
       document.getElementById('datasetSel').value = finalId;
+      renderDatasetPicker();
     }
   });
 }
@@ -2691,7 +2716,7 @@ document.getElementById('fileIn').onchange = function(e){
   rd.onload = function () {
     if (isStaleLoad(gen)) return;
     loadCtl.reader = null;
-    finishLocalLoad(rd.result, f.name, gen);
+    finishLocalLoad(rd.result, f.name, gen, null, localFilePath(f));
   };
   rd.onerror = function () {
     if (isStaleLoad(gen)) return;
@@ -2743,6 +2768,107 @@ document.addEventListener('click', function(e){
   if (b) downloadPanel(b.getAttribute('data-plot'), b.getAttribute('data-fmt'));
 });
 
+// One visible picker; the hidden selects retain the loading entry points.
+function localFilePath(file) {
+  // Standard browser file inputs deliberately hide absolute filesystem paths.
+  return file.path || file.webkitRelativePath || '';
+}
+function datasetEntries() {
+  return [
+    { id:'data/GLOBESINK_monthly_climatologies_smoothed_interpolated_minimal.nc', name:'Smoothed climatology' },
+    { id:'data/GLOBESINK_monthly_climatologies_minimal.nc', name:'Raw climatology' }
+  ].concat(Object.keys(loadCtl.localFiles).map(function(id) {
+    var f = loadCtl.localFiles[id];
+    return { id:id, name:f.name, path:f.path, local:true };
+  }));
+}
+function datasetSlot(id) {
+  return [loadCtl.lastOkDataset === id ? '1' : '', cmpCtl.last === id ? '2' : ''].filter(Boolean).join(', ');
+}
+function closeDatasetMenu() {
+  document.getElementById('datasetMenu').hidden = true;
+  document.getElementById('datasetToggle').setAttribute('aria-expanded', 'false');
+}
+function chooseDataset(id, second) {
+  if (id === '__pick__') {
+    document.getElementById(second ? 'cmpFileIn' : 'fileIn').click();
+  } else if (second) {
+    loadCompare(cmpCtl.last === id ? '' : id);
+  } else {
+    var sel = document.getElementById('datasetSel');
+    sel.value = id; sel.onchange({ target:sel });
+  }
+  closeDatasetMenu();
+  document.getElementById('datasetToggle').focus();
+}
+function renderDatasetPicker() {
+  var entries = datasetEntries(), host = document.getElementById('datasetOptions');
+  var primary = entries.filter(function(e) { return e.id === loadCtl.lastOkDataset; })[0];
+  document.getElementById('datasetSummary').textContent = (primary ? primary.name : 'Choose dataset…') + (cmpCtl.last ? ' (+2)' : '');
+  host.innerHTML = '';
+  function row(entry) {
+    var wrap = document.createElement('div'); wrap.className = 'datasetRow';
+    var b = document.createElement('button'); b.type = 'button'; b.className = 'datasetOption';
+    var slot = datasetSlot(entry.id);
+    b.setAttribute('aria-label', entry.name + (entry.path ? ' — ' + entry.path : '') + (slot ? ', dataset ' + slot : ''));
+    var badge = document.createElement('span'); badge.className = 'datasetBadge'; badge.textContent = slot;
+    b.appendChild(badge);
+    var name = document.createElement('span'); name.textContent = entry.name; b.appendChild(name);
+    if (entry.local) {
+      var path = document.createElement('span'); path.className = 'datasetPath';
+      path.textContent = '— ' + (entry.path || 'folder path unavailable'); b.appendChild(path);
+    }
+    b.onclick = function(e) { chooseDataset(entry.id, e.metaKey || e.ctrlKey); };
+    wrap.appendChild(b);
+    if (entry.local) {
+      var edit = document.createElement('button'); edit.type = 'button'; edit.className = 'datasetPathEdit';
+      edit.textContent = entry.path ? 'Edit path…' : 'Add path…';
+      edit.setAttribute('aria-label', 'Set path label for ' + entry.name);
+      edit.onclick = function() {
+        var path = window.prompt('Folder or full path for ' + entry.name + ' (label only; saved for this session):', entry.path || '');
+        if (path !== null) { loadCtl.localFiles[entry.id].path = path.trim(); renderDatasetPicker(); document.getElementById('datasetToggle').focus(); }
+      };
+      wrap.appendChild(edit);
+    }
+    host.appendChild(wrap);
+  }
+  function group(label) {
+    var heading = document.createElement('div'); heading.className = 'datasetGroup'; heading.textContent = label; host.appendChild(heading);
+  }
+  group('Built-in — core variables only');
+  entries.filter(function(e) { return !e.local; }).forEach(row);
+  if (entries.some(function(e) { return e.local; })) group('Your files');
+  entries.filter(function(e) { return e.local; }).forEach(row);
+  row({ id:'__pick__', name:'Choose file from your computer…' });
+  if (cmpCtl.last) {
+    var clear = document.createElement('button'); clear.type = 'button'; clear.className = 'datasetOption';
+    clear.textContent = 'Remove dataset 2'; clear.onclick = function() { loadCompare(''); closeDatasetMenu(); document.getElementById('datasetToggle').focus(); };
+    host.appendChild(clear);
+  }
+}
+document.getElementById('datasetToggle').onclick = function() {
+  var menu = document.getElementById('datasetMenu');
+  if (!menu.hidden) { closeDatasetMenu(); return; }
+  renderDatasetPicker(); menu.hidden = false;
+  this.setAttribute('aria-expanded', 'true');
+  var first = document.getElementById('datasetOptions').querySelector('button');
+  if (first) first.focus();
+};
+document.addEventListener('click', function(e) {
+  if (e.composedPath().indexOf(document.getElementById('datasetPicker')) < 0) closeDatasetMenu();
+});
+document.getElementById('datasetPicker').addEventListener('keydown', function(e) {
+  if (e.key === 'Escape') { closeDatasetMenu(); document.getElementById('datasetToggle').focus(); e.preventDefault(); }
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    var buttons = Array.from(document.getElementById('datasetOptions').querySelectorAll('button'));
+    var i = buttons.indexOf(document.activeElement), step = e.key === 'ArrowDown' ? 1 : -1;
+    if (buttons.length) { buttons[(i + step + buttons.length) % buttons.length].focus(); e.preventDefault(); }
+  }
+});
+document.addEventListener('focusin', function(e) {
+  if (!document.getElementById('datasetPicker').contains(e.target)) closeDatasetMenu();
+});
+
 // ---------- compare mode: loading dataset 2 ----------
 var cmpCtl = { last: '', gen: 0 };
 function setModel2FromBuffer(ab, name, source, value, gen) {
@@ -2754,6 +2880,7 @@ function setModel2FromBuffer(ab, name, source, value, gen) {
     if (S.model && !sameGrid(S.model, m2)) throw new Error('not on dataset 1\'s grid (' + m2.sizes.depth + '×' + m2.sizes.lat + '×' + m2.sizes.lon + '×' + m2.sizes.month + ')');
     S.model2 = m2; S.cmpHL = null; cmpCtl.last = value;
     document.getElementById('cmpSel').value = value;
+    renderDatasetPicker();
     hideOverlay();
     setStatus('Comparing with ' + name + (m2.vars[S.varName] ? '.' : ' — it has no ' + S.varName + '.'), 'ok');
   } catch (e) {
@@ -2766,7 +2893,7 @@ function setModel2FromBuffer(ab, name, source, value, gen) {
 }
 function loadCompare(value) {
   var gen = ++cmpCtl.gen;
-  if (!value) { S.model2 = null; S.cmpHL = null; cmpCtl.last = ''; updateCompareLayout(); recomputeAll(); return; }
+  if (!value) { S.model2 = null; S.cmpHL = null; cmpCtl.last = ''; renderDatasetPicker(); updateCompareLayout(); recomputeAll(); return; }
   var cached = loadCtl.localFiles[value];
   if (cached) {
     showOverlay('Loading dataset 2: ' + cached.name + '…', 'loading');
@@ -2790,10 +2917,11 @@ document.getElementById('cmpFileIn').onchange = function (e) {
   var rd = new FileReader(), gen = ++cmpCtl.gen;
   showOverlay('Reading dataset 2: ' + f.name + '…', 'loading');
   rd.onload = function () {
-    var id = registerLocalFile(f.name, rd.result);
+    if (gen !== cmpCtl.gen) return;
+    var id = registerLocalFile(f.name, rd.result, localFilePath(f));
     afterPaint(function () { setModel2FromBuffer(rd.result, f.name, f.name, id, gen); });
   };
-  rd.onerror = function () { hideOverlay(); setStatus('Dataset 2: could not read ' + f.name, 'error'); };
+  rd.onerror = function () { if (gen !== cmpCtl.gen) return; hideOverlay(); setStatus('Dataset 2: could not read ' + f.name, 'error'); };
   rd.readAsArrayBuffer(f);
   e.target.value = '';
 };
@@ -2805,6 +2933,7 @@ window.addEventListener('resize', function(){ draw(); syncVarDescWidth(); });
 
 initInteraction();
 loadLand();
+renderDatasetPicker();
 loadPublished(document.getElementById('datasetSel').value);  // default: smoothed climatology
 </script>
 </body>

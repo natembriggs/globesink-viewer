@@ -34,9 +34,11 @@ function ctxStub() {
 globalThis.Path2D = function () { this.moveTo = function () {}; this.lineTo = function () {}; this.closePath = function () {}; };
 function elStub(id) {
   var e = { id: id, value: '', innerHTML: '', textContent: '', className: '', checked: false, disabled: false,
-    style: {}, dataset: {}, files: [], options: [],
+    style: {}, dataset: {}, files: [], options: [], children: [], hidden: true,
+    setAttribute: function (k, v) { this[k] = v; }, focus: function () {}, contains: function () { return false; },
+    querySelector: function () { return null; },
     classList: { add: function () {}, remove: function () {}, toggle: function () {} },
-    appendChild: function () {}, insertBefore: function () {}, addEventListener: function () {}, click: function () {},
+    appendChild: function (child) { this.children.push(child); }, insertBefore: function () {}, addEventListener: function () {}, click: function () {},
     getContext: function () { return e._ctx || (e._ctx = ctxStub()); },
     getBoundingClientRect: function () { return { left: 0, top: 0, width: 500, height: 360 }; },
     querySelectorAll: function () { return { forEach: function () {} }; } };
@@ -90,7 +92,7 @@ try {
   var m = html.match(/<script>([\s\S]*?)<\/script>\s*<\/body>/);
   if (!m) throw new Error('could not extract inline script');
   // strict-mode eval keeps declarations local, so expose what we need to assert on
-  eval(m[1] + '\n;globalThis.__gv = { S: S, recomputeAll: recomputeAll, recomputeKeep: recomputeKeep, loadModelFromBuffer: loadModelFromBuffer, loadPublished: loadPublished, panelRects: panelRects, landLoaded: function(){ return LAND != null; }, land: function(){ return LAND; }, csvSectionGrid: csvSectionGrid, csvMapLong: csvMapLong, jsonExport: jsonExport, draw: draw, buildRotatedAxis: buildRotatedAxis, axisPixelToDataCol: axisPixelToDataCol, wrapMod: wrapMod, secGeom: function(){ return secGeom; }, latMonthGeom: function(){ return latMonthGeom; }, depthLatGeom: function(){ return depthLatGeom; }, depthLatBox: depthLatBox, commitDepthLatBox: commitDepthLatBox, latMonthBox: latMonthBox, commitLatMonthBox: commitLatMonthBox, productSet: productSet, bboxRange: bboxRange, syncAnchors: syncAnchors, precisionToggleShown: function(){ return document.getElementById(\'autoPrecLabel\').style.display !== \'none\'; }, loadCtl: loadCtl, setModel2FromBuffer: setModel2FromBuffer, cmpCtl: cmpCtl, compareOn: compareOn, regressionPoints: regressionPoints, regGeom: function(){ return regGeom; }, regressionClick: regressionClick, secGeom2: function(){ return secGeom2; }, mapGeom2: function(){ return mapGeom2; }, loadCompare: loadCompare };');
+  eval(m[1] + '\n;globalThis.__gv = { S: S, recomputeAll: recomputeAll, recomputeKeep: recomputeKeep, loadModelFromBuffer: loadModelFromBuffer, loadPublished: loadPublished, panelRects: panelRects, landLoaded: function(){ return LAND != null; }, land: function(){ return LAND; }, csvSectionGrid: csvSectionGrid, csvMapLong: csvMapLong, jsonExport: jsonExport, draw: draw, buildRotatedAxis: buildRotatedAxis, axisPixelToDataCol: axisPixelToDataCol, wrapMod: wrapMod, secGeom: function(){ return secGeom; }, latMonthGeom: function(){ return latMonthGeom; }, depthLatGeom: function(){ return depthLatGeom; }, depthLatBox: depthLatBox, commitDepthLatBox: commitDepthLatBox, latMonthBox: latMonthBox, commitLatMonthBox: commitLatMonthBox, productSet: productSet, bboxRange: bboxRange, syncAnchors: syncAnchors, precisionToggleShown: function(){ return document.getElementById(\'autoPrecLabel\').style.display !== \'none\'; }, loadCtl: loadCtl, setModel2FromBuffer: setModel2FromBuffer, cmpCtl: cmpCtl, compareOn: compareOn, regressionPoints: regressionPoints, regGeom: function(){ return regGeom; }, regressionClick: regressionClick, secGeom2: function(){ return secGeom2; }, mapGeom2: function(){ return mapGeom2; }, loadCompare: loadCompare, chooseDataset: chooseDataset, datasetSlot: datasetSlot, datasetEntries: datasetEntries, renderDatasetPicker: renderDatasetPicker };');
   var G = globalThis.__gv, S = G.S;
   var recomputeAll = G.recomputeAll, recomputeKeep = G.recomputeKeep;
   // the app now starts blank; drive the file-load path directly
@@ -575,6 +577,22 @@ try {
     chk('a failed local file pick registers no dropdown entry', Object.keys(G.loadCtl.localFiles).length === nBeforeBad);
     chk('a failed local file pick reverts the dropdown selection', sel.value === beforeBad);
     chk('a failed local file pick surfaces an error', status.className === 'status-error' && /bad\.nc/.test(status.textContent));
+
+    // Unified picker: modifier selection toggles dataset 2 without replacing 1.
+    G.chooseDataset(newId, false);
+    var primaryId = G.loadCtl.lastOkDataset;
+    G.chooseDataset(newId, true);
+    chk('modifier selection keeps dataset 1', G.loadCtl.lastOkDataset === primaryId);
+    chk('modifier selection loads dataset 2', G.cmpCtl.last === newId && !!S.model2);
+    chk('menu identifies both dataset slots explicitly', G.datasetSlot(newId) === '1, 2');
+    G.chooseDataset(newId, true);
+    chk('repeated modifier selection removes dataset 2', G.cmpCtl.last === '' && S.model2 === null);
+    fileIn.files = [{ name: 'mine.nc', path: '/another/folder/mine.nc', _buf: goodBuf }];
+    fileIn.onchange({ target: fileIn });
+    var duplicateId = G.loadCtl.lastOkDataset;
+    chk('duplicate filenames retain distinct entries', duplicateId !== newId && G.loadCtl.localFiles[newId].name === G.loadCtl.localFiles[duplicateId].name);
+    chk('local path retained for open menu', G.datasetEntries().filter(function(e) { return e.id === duplicateId; })[0].path === '/another/folder/mine.nc');
+    chk('closed selector excludes local paths', document.getElementById('datasetSummary').textContent === 'mine.nc');
 
     // reload the synthetic file so later checks keep their known variables
     G.loadModelFromBuffer(fb0.buffer.slice(fb0.byteOffset, fb0.byteOffset + fb0.byteLength), 'globesink_example.nc');

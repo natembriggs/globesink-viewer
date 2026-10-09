@@ -120,7 +120,18 @@ selection stays on each panel as a thin magenta rectangle.
 
 ## Comparing two datasets
 
-**Compare with** loads a second file on the same grid (same depth, latitude, longitude and month
+Use the **Datasets** dropdown for both files: click normally to select dataset 1,
+or Command-click (Mac) / Ctrl-click (PC) to select dataset 2. Repeat the modified
+click on dataset 2 to remove it, or use "Remove dataset 2" in the menu. Numbered
+badges identify each selection when the dropdown is open. The same shortcuts work
+on "Choose file from your computer…" to load a new file into either slot.
+
+Local filenames are followed by their paths only in the open menu; the closed
+control stays compact. Browsers usually withhold absolute paths. Where no path
+is available, "Add path…" lets you label the file with its folder or full path
+for this session; "Edit path…" updates it. Duplicate filenames stay separate.
+
+The second file must use the same grid (same depth, latitude, longitude and month
 cells; e.g. two versions of the product). The page then switches to a three-column layout:
 
 - **Left two columns:** dataset 1's section and map on top, dataset 2's below, each at two thirds
