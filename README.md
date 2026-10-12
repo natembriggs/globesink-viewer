@@ -145,14 +145,49 @@ cells; e.g. two versions of the product). The page then switches to a three-colu
   shift/⌘-clicking, the arrow keys and axis panning on any of them update the other three.
   Dataset 2 uses dataset 1's conditions mask and the same weighting, so the same cells are compared.
   The sections share one colour scale, and the maps share another, even when panels are unlinked.
-- **Right column:** a 1 vs 2 regression of the **map cells** (lat × lon, averaged over the
-  selected months and depths) or the **section cells** (month × depth, averaged over the selected
-  area), with the 1:1 line, the least-squares line (in log₁₀ space on a log scale), r², n and the
-  median 2/1 ratio. **Clicking a point outlines its cell** on both datasets' panels and shows its
-  position and both values in the title; clicking empty space clears it.
+- **Right column:** a 1 vs 2 regression (see [Regression panel](#regression-panel)).
 
 Marginal and extra panels are dataset-1 views and are switched off while comparing. A file on
 another grid is refused (the comparison in place is kept).
+
+## Comparing two variables
+
+The **Variables** dropdown works the same way: click to choose variable 1, or Command-click
+(Mac) / Ctrl-click (PC) to choose variable 2 from the same dataset. Repeat the modified click (or
+use "Remove variable 2") to remove it. The layout is the same as for two datasets: variable 1's
+section and map on top, variable 2's below, with a variable 1 vs 2 regression on the right.
+Variable 2 is drawn with its own default colormap and its own colour range (auto-fitted even when
+the colour range is set manually; linked between its section and map when "link panels" is on).
+Its averages use the same selections, conditions mask, weighting and missing-value policy.
+
+Comparing two variables and comparing two datasets are exclusive: choosing variable 2 removes
+dataset 2, and loading dataset 2 removes variable 2.
+
+## Regression panel
+
+In either compare mode the right-hand column regresses 2 on 1 using one of three kinds of point:
+
+- **map cells** — lat × lon cells of the maps (averaged over the selected months and depths);
+- **section cells** — month × depth cells of the sections (averaged over the selected area);
+- **4-D cells** — every individual depth × lat × lon × month grid cell, with no averaging.
+
+Points inside the selection on the left panels are drawn in colour; the rest are grey. For map
+cells the selection is the map box, for section cells the section box, and for 4-D cells a cell
+must lie in both boxes and pass any conditions. Only the coloured points set the axis ranges and
+enter the least-squares fit, r², n and the median 2/1 ratio (n also shows the total number of
+points). Grey points beyond the fitted axes are clipped. With no selected points, the axes fall
+back to all points.
+
+Selected points can be coloured by **depth**, **lat** or **lon** (viridis, scaled to the selected
+points' range, with a key below the x axis), or left a single colour. Colourings a point kind
+lacks are greyed out: map cells have no depth, section cells no lat/lon.
+
+Comparing datasets, both axes share one range and the 1:1 line is drawn. Comparing variables,
+each axis has its own range and there is no 1:1 line. On a log scale the fit is in log₁₀ space.
+**Clicking a point outlines its cell** on the panels on the left (for a 4-D cell, on both the
+section and the map) and shows its position and both values in the title. Clicking empty space
+clears it. A 4-D regression can have ~10⁵–10⁶ points; these are rasterised, so the panel still
+updates live while dragging a selection.
 
 ## Annual (5-D) product
 

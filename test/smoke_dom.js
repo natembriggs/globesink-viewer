@@ -29,6 +29,8 @@ function ctxStub() {
     save: noop, restore: noop, translate: noop, rotate: noop, scale: noop,
     measureText: function (s) { return { width: (s || '').length * 6 }; },
     createLinearGradient: function () { return { addColorStop: noop }; },
+    createImageData: function (w, h) { return { data: new Uint8ClampedArray(w * h * 4) }; },
+    putImageData: noop, drawImage: noop,
     fillStyle: '', strokeStyle: '', font: '', lineWidth: 1, lineJoin: '', textAlign: '', textBaseline: '' };
 }
 globalThis.Path2D = function () { this.moveTo = function () {}; this.lineTo = function () {}; this.closePath = function () {}; };
@@ -92,7 +94,7 @@ try {
   var m = html.match(/<script>([\s\S]*?)<\/script>\s*<\/body>/);
   if (!m) throw new Error('could not extract inline script');
   // strict-mode eval keeps declarations local, so expose what we need to assert on
-  eval(m[1] + '\n;globalThis.__gv = { S: S, recomputeAll: recomputeAll, recomputeKeep: recomputeKeep, loadModelFromBuffer: loadModelFromBuffer, loadPublished: loadPublished, panelRects: panelRects, landLoaded: function(){ return LAND != null; }, land: function(){ return LAND; }, csvSectionGrid: csvSectionGrid, csvMapLong: csvMapLong, jsonExport: jsonExport, draw: draw, buildRotatedAxis: buildRotatedAxis, axisPixelToDataCol: axisPixelToDataCol, wrapMod: wrapMod, secGeom: function(){ return secGeom; }, latMonthGeom: function(){ return latMonthGeom; }, depthLatGeom: function(){ return depthLatGeom; }, depthLatBox: depthLatBox, commitDepthLatBox: commitDepthLatBox, latMonthBox: latMonthBox, commitLatMonthBox: commitLatMonthBox, productSet: productSet, bboxRange: bboxRange, syncAnchors: syncAnchors, precisionToggleShown: function(){ return document.getElementById(\'autoPrecLabel\').style.display !== \'none\'; }, loadCtl: loadCtl, setModel2FromBuffer: setModel2FromBuffer, cmpCtl: cmpCtl, compareOn: compareOn, regressionPoints: regressionPoints, regGeom: function(){ return regGeom; }, regressionClick: regressionClick, secGeom2: function(){ return secGeom2; }, mapGeom2: function(){ return mapGeom2; }, loadCompare: loadCompare, chooseDataset: chooseDataset, datasetSlot: datasetSlot, datasetEntries: datasetEntries, renderDatasetPicker: renderDatasetPicker, localDatasetMetadata: localDatasetMetadata, localDatasetLabel: localDatasetLabel };');
+  eval(m[1] + '\n;globalThis.__gv = { S: S, recomputeAll: recomputeAll, recomputeKeep: recomputeKeep, loadModelFromBuffer: loadModelFromBuffer, loadPublished: loadPublished, panelRects: panelRects, landLoaded: function(){ return LAND != null; }, land: function(){ return LAND; }, csvSectionGrid: csvSectionGrid, csvMapLong: csvMapLong, jsonExport: jsonExport, draw: draw, buildRotatedAxis: buildRotatedAxis, axisPixelToDataCol: axisPixelToDataCol, wrapMod: wrapMod, secGeom: function(){ return secGeom; }, latMonthGeom: function(){ return latMonthGeom; }, depthLatGeom: function(){ return depthLatGeom; }, depthLatBox: depthLatBox, commitDepthLatBox: commitDepthLatBox, latMonthBox: latMonthBox, commitLatMonthBox: commitLatMonthBox, productSet: productSet, bboxRange: bboxRange, syncAnchors: syncAnchors, precisionToggleShown: function(){ return document.getElementById(\'autoPrecLabel\').style.display !== \'none\'; }, loadCtl: loadCtl, setModel2FromBuffer: setModel2FromBuffer, cmpCtl: cmpCtl, compareOn: compareOn, regressionPoints: regressionPoints, regGeom: function(){ return regGeom; }, regressionClick: regressionClick, secGeom2: function(){ return secGeom2; }, mapGeom2: function(){ return mapGeom2; }, loadCompare: loadCompare, chooseDataset: chooseDataset, datasetSlot: datasetSlot, datasetEntries: datasetEntries, renderDatasetPicker: renderDatasetPicker, localDatasetMetadata: localDatasetMetadata, localDatasetLabel: localDatasetLabel, varPairOn: varPairOn, pairOn: pairOn, chooseVariable: chooseVariable, setVariable2: setVariable2, varSlot: varSlot, highlightCell: highlightCell, regColorAvailable: regColorAvailable };');
   var G = globalThis.__gv, S = G.S;
   var recomputeAll = G.recomputeAll, recomputeKeep = G.recomputeKeep;
   // the app now starts blank; drive the file-load path directly
@@ -636,27 +638,97 @@ try {
   (function () {
     G.loadModelFromBuffer(fb0.buffer.slice(fb0.byteOffset, fb0.byteOffset + fb0.byteLength), 'globesink_example.nc');
     var b2 = fb0.buffer.slice(fb0.byteOffset, fb0.byteOffset + fb0.byteLength);
+    S.strict = false;   // 'missing if any' over the whole globe would blank everything
+    // known selections (the reload carries over the earlier checks' boxes): the whole globe,
+    // and months 0-5 of depth bins 1-2
+    var sz = S.model.sizes;
+    S.boxLL = { anchor: [0, 0], active: [sz.lat - 1, sz.lon - 1], set: GVCore.selRectSet([0, 0], [sz.lat - 1, sz.lon - 1], sz.lon) };
+    S.boxTD = { anchor: [1, 0], active: [2, 5], set: GVCore.selRectSet([1, 0], [2, 5], sz.month) };
     G.setModel2FromBuffer(b2, 'copy.nc', 'copy.nc', 'copy', ++G.cmpCtl.gen);
     chk('compare mode on for the same grid', G.compareOn() && S.secArr2 && S.mapArr2);
     chk('dataset 2 arrays equal dataset 1 for an identical file',
       Array.prototype.every.call(S.mapArr, function (v, i) { return (isNaN(v) && isNaN(S.mapArr2[i])) || v === S.mapArr2[i]; }));
     G.draw();
     chk('dataset 2 panels drawn', !!G.secGeom2() && !!G.mapGeom2());
-    var P = G.regressionPoints();
-    chk('regression: one point per map cell with values', P.kind === 'map' && P.pts.length > 0 && P.pts.every(function (p) { return p.x === p.y; }));
-    var g = G.regGeom(), q = g.pts[0];
-    G.regressionClick({ clientX: q.x, clientY: q.y });
-    chk('clicking a regression point highlights its cell', S.cmpHL && S.cmpHL.kind === 'map' && S.cmpHL.r === q.p.r && S.cmpHL.c === q.p.c);
+    var P = G.regressionPoints(), every = function (P, f) { for (var i = 0; i < P.n; i++) if (!f(i)) return false; return true; };
+    chk('regression: one point per map cell with values', P.kind === 'map' && P.n > 0 && every(P, function (i) { return P.x[i] === P.y[i]; }));
+    chk('map points selected exactly where the map box is', every(P, function (i) { return P.sel[i] === (S.boxLL.set[P.idx[i]] ? 1 : 0); }));
+    var g = G.regGeom(), k0 = 0;
+    G.regressionClick({ clientX: g.X[k0], clientY: g.Y[k0] });
+    var nX = S.model.sizes.lon;
+    chk('clicking a regression point highlights its cell', S.cmpHL && S.cmpHL.kind === 'map' && S.cmpHL.y === Math.floor(P.idx[k0] / nX) && S.cmpHL.x === P.idx[k0] % nX);
+    chk('highlight drawn on the map, not the section', !!G.highlightCell('map') && !G.highlightCell('section'));
     S.regMode = 'section'; S.cmpHL = null; G.draw();
-    chk('regression on section cells', G.regressionPoints().kind === 'section');
+    var Ps = G.regressionPoints();
+    chk('regression on section cells', Ps.kind === 'section');
+    var nM = S.model.sizes.month, nSelS = 0;
+    for (var i = 0; i < Ps.n; i++) { nSelS += Ps.sel[i]; if (Ps.sel[i] !== (S.boxTD.set[Ps.idx[i]] ? 1 : 0)) { nSelS = -1e9; break; } }
+    chk('section points selected exactly where the section box is', nSelS > 0 && nSelS < Ps.n);
+    // 4-D cells: every individual cell, selected = inside both boxes (and the conditions)
+    S.regMode = 'cells'; G.draw();
+    var Pc = G.regressionPoints(), s4 = S.model.sizes, nSelC = 0, okSel = true;
+    for (var j = 0; j < Pc.n; j++) {
+      var id = Pc.idx[j], m = id % s4.month, t = (id - m) / s4.month, x = t % s4.lon; t = (t - x) / s4.lon;
+      var y = t % s4.lat, p = (t - y) / s4.lat;
+      var want = (S.boxLL.set[y * s4.lon + x] && S.boxTD.set[p * s4.month + m]) ? 1 : 0;
+      if (Pc.sel[j] !== want) okSel = false;
+      nSelC += Pc.sel[j];
+    }
+    chk('4-D cells: one point per data cell with values', Pc.kind === 'cells' && Pc.n > Ps.n && Pc.n <= s4.depth * s4.lat * s4.lon * s4.month);
+    chk('4-D cells: selected = inside both boxes', okSel && nSelC > 0 && nSelC < Pc.n);
+    S.conditions = [{ varName: 'n_profiles', op: '>=', value: 1e9 }]; recomputeKeep(); recomputeAll();
+    var Pk = G.regressionPoints(), anySel = false;
+    for (var j2 = 0; j2 < Pk.n; j2++) if (Pk.sel[j2]) anySel = true;
+    chk('4-D cells: cells failing the conditions are not selected', !anySel);
+    G.draw(); chk('regression with nothing selected draws', !!G.regGeom());
+    S.conditions = []; recomputeKeep(); recomputeAll();
+    var gc = G.regGeom(), kc = -1;
+    for (var j3 = 0; j3 < Pc.n && kc < 0; j3++) if (gc.P.sel[j3]) kc = j3;
+    G.regressionClick({ clientX: gc.X[kc], clientY: gc.Y[kc] });
+    chk('clicking a 4-D point outlines its cell on both the section and the map', S.cmpHL && S.cmpHL.kind === 'cells' && !!G.highlightCell('map') && !!G.highlightCell('section'));
+    ['depth', 'lat', 'lon'].forEach(function (c) { S.regColor = c; G.draw(); });
+    chk('colour options per point kind', G.regColorAvailable('cells', 'depth') && !G.regColorAvailable('map', 'depth') && G.regColorAvailable('map', 'lon') && !G.regColorAvailable('section', 'lat'));
+    S.regColor = 'depth'; S.regMode = 'map'; G.draw(); chk('unavailable colouring falls back silently', !!G.regGeom());
+    S.regColor = 'none'; S.regMode = 'section';
     S.log = true; recomputeAll(); G.draw(); S.log = false;
-    chk('log-scale regression ok', G.regressionPoints().pts.every(function (p) { return p.x > 0 && p.y > 0; }));
+    var Pl = G.regressionPoints();
+    chk('log-scale regression ok', every(Pl, function (i) { return Pl.x[i] > 0 && Pl.y[i] > 0; }));
     S.regMode = 'map';
     var fi2 = readFile('example_data/globesink_example_interpolated.nc', 'binary');
     G.setModel2FromBuffer(fi2.buffer.slice(fi2.byteOffset, fi2.byteOffset + fi2.byteLength), 'interp.nc', 'interp.nc', 'interp', ++G.cmpCtl.gen);
     chk('a dataset on another grid is refused and the comparison kept', G.compareOn() && S.model2.source === 'copy.nc');
     G.loadCompare('');
     chk('compare mode off', !G.compareOn() && S.secArr2 === null);
+    G.draw();
+
+    // ---- variable compare: a second variable of dataset 1 ----
+    var v1 = S.varName, v2 = S.model.varNames.filter(function (n) { return n !== v1; })[0];
+    G.chooseVariable(v2, true);
+    chk('modifier selection sets variable 2', G.varPairOn() && S.varName2 === v2 && S.varName === v1);
+    chk('variable picker badges both slots', G.varSlot(v1) === '1' && G.varSlot(v2) === '2');
+    chk('variable 2 arrays computed', S.secArr2 && S.mapArr2 && S.secArr2.length === S.secArr.length);
+    var ref = GVCore.mapReduce(S.model, v2, S.keep, S.strict, GVCore.selCells(S.boxTD.set, S.model.sizes.month), S.weightMode, null);
+    chk('variable 2 map is that variable', Array.prototype.every.call(ref, function (v, i) { return (isNaN(v) && isNaN(S.mapArr2[i])) || v === S.mapArr2[i]; }));
+    chk('variable 2 has its own colour range', S.mapLim2 !== S.mapLim && S.mapLim2[1] > S.mapLim2[0]);
+    G.draw();
+    chk('variable 2 panels and regression drawn', !!G.secGeom2() && !!G.mapGeom2() && !!G.regGeom());
+    ['map', 'section', 'cells'].forEach(function (md) { S.regMode = md; G.draw(); });
+    var Pv = G.regressionPoints();
+    chk('variable regression pairs variable 1 with variable 2', Pv.kind === 'cells' && Pv.x[0] === S.model.vars[v1].data[Pv.idx[0]] && Pv.y[0] === S.model.vars[v2].data[Pv.idx[0]]);
+    S.regMode = 'map';
+    G.setModel2FromBuffer(fb0.buffer.slice(fb0.byteOffset, fb0.byteOffset + fb0.byteLength), 'copy.nc', 'copy.nc', 'copy', ++G.cmpCtl.gen);
+    chk('loading dataset 2 replaces variable 2', G.compareOn() && S.varName2 === null && !G.varPairOn());
+    G.chooseVariable(v2, true);
+    chk('choosing variable 2 replaces dataset 2', G.varPairOn() && S.model2 === null && G.cmpCtl.last === '');
+    G.chooseVariable(v2, false);
+    chk('choosing variable 2 as variable 1 clears variable 2', S.varName === v2 && !G.varPairOn() && !G.pairOn());
+    G.chooseVariable(v1, false); G.chooseVariable(v2, true); G.chooseVariable(v2, true);
+    chk('repeated modifier selection removes variable 2', S.varName === v1 && !G.varPairOn());
+    G.setVariable2(v2);
+    G.loadModelFromBuffer(fb0.buffer.slice(fb0.byteOffset, fb0.byteOffset + fb0.byteLength), 'globesink_example.nc');
+    chk('variable 2 carried over a dataset reload', G.varPairOn() && S.varName2 === v2);
+    G.setVariable2(null);
+    chk('variable compare off', !G.pairOn() && S.secArr2 === null);
     G.draw();
   })();
 

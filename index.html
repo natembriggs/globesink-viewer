@@ -23,13 +23,14 @@
   .seg button { border:0; border-radius:0; padding:4px 9px; background:#fff; }
   .seg button.on { background:var(--ink); color:#fff; }
   .datasetPicker { position:relative; width:280px; max-width:calc(100vw - 28px); }
-  #datasetToggle { width:100%; display:flex; gap:8px; align-items:center; text-align:left; }
-  #datasetSummary { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  #datasetMenu { position:absolute; top:100%; left:0; z-index:70; width:max-content;
+  #varPicker { width:300px; }
+  #datasetToggle, #varToggle { width:100%; display:flex; gap:8px; align-items:center; text-align:left; }
+  #datasetSummary, #varSummary { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  #datasetMenu, #varMenu { position:absolute; top:100%; left:0; z-index:70; width:max-content;
     min-width:100%; max-width:calc(100vw - 28px); max-height:65vh; overflow:auto;
     background:white; border:1px solid var(--line); border-radius:6px; padding:6px;
     box-shadow:0 5px 18px #0003; }
-  #datasetMenu[hidden] { display:none; }
+  #datasetMenu[hidden], #varMenu[hidden] { display:none; }
   .datasetHelp, .datasetGroup { padding:5px 8px; font-size:11px; color:var(--muted); }
   .datasetGroup { font-weight:600; }
   .datasetRow { display:flex; align-items:center; }
@@ -39,6 +40,7 @@
   .datasetDetail { color:var(--muted); overflow-wrap:anywhere; }
   .datasetDetailEdit { border:0; font-size:11px; color:var(--muted); white-space:nowrap; }
   .range-in { width:74px; }
+  #varDesc { white-space:pre-line; }
   #conds { padding:6px 14px; border-bottom:1px solid var(--line); background:var(--panel); }
   .condsRow { display:flex; align-items:center; justify-content:space-between; gap:10px; }
   #conds h4 { margin:0; font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:.04em; }
@@ -82,6 +84,7 @@
   .panelwrap h3 .ds { font-weight:400; color:var(--muted); }
   #regHead { display:flex; justify-content:center; align-items:center; gap:8px; margin-bottom:4px; flex-wrap:wrap; }
   #regHead .seg button { padding:2px 7px; font-size:12px; }
+  #regHead .seg button:disabled { color:#b8bcc2; cursor:default; }
   .dlrow .dl { padding:2px 8px; font-size:11px; margin:0 2px; border:1px solid var(--line); border-radius:5px; background:#fff; cursor:pointer; }
   .dlrow .dl:hover { border-color:var(--accent); color:var(--accent); }
 </style>
@@ -127,7 +130,16 @@
     <input type="file" id="cmpFileIn" accept=".nc" style="display:none">
     <div class="hint">Dataset 2 on the same grid: shown below<br>dataset 1, with a 1 vs 2 regression.</div>
   </div>
-  <div class="grp"><label>Variable</label><select id="varSel"></select>
+  <div class="grp">
+    <label id="varLabel">Variables</label>
+    <div class="datasetPicker" id="varPicker">
+      <button id="varToggle" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="varMenu" aria-labelledby="varLabel varSummary"><span id="varSummary"></span><span aria-hidden="true">▾</span></button>
+      <div id="varMenu" role="dialog" aria-label="Choose variables" hidden>
+        <div class="datasetHelp">Click: variable 1 · ⌘/Ctrl-click: variable 2 (click again to remove)</div>
+        <div id="varOptions"></div>
+      </div>
+    </div>
+    <select id="varSel" hidden aria-hidden="true"></select>
     <div class="hint" id="varDesc"></div>
   </div>
   <div class="grp"><label>Colormap</label>
@@ -228,10 +240,11 @@
   </div>
   <div class="panelwrap cmpOnly" id="regWrap">
     <div id="regHead"><h3 id="regTitle" style="margin:0">dataset 1 vs 2</h3>
-      <div class="seg" id="regSeg" title="Which cells are the points: the map's lat × lon cells or the section's month × depth cells"><button data-v="map" class="on">map cells</button><button data-v="section">section cells</button></div>
+      <div class="seg" id="regSeg" title="Which cells are the points: the map's lat × lon cells, the section's month × depth cells, or every individual depth × lat × lon × month grid cell (no averaging)"><button data-v="map" class="on">map cells</button><button data-v="section">section cells</button><button data-v="cells">4-D cells</button></div>
+      <div class="seg" id="regColorSeg" title="Colour the selected points by their depth, latitude or longitude"><button data-v="none" class="on">no colour</button><button data-v="depth">depth</button><button data-v="lat">lat</button><button data-v="lon">lon</button></div>
     </div>
     <canvas id="regCanvas"></canvas>
-    <div class="hint" id="regInfo" style="text-align:center">Click a point to outline its cell on the panels on the left (click empty space to clear).</div>
+    <div class="hint" id="regInfo" style="text-align:center">Coloured points are the cells selected on the panels on the left (and passing any conditions); only they set the axis ranges and enter the fit. Other cells are grey. Click a point to outline its cell on the left (click empty space to clear).</div>
   </div>
 </div>
 
@@ -310,6 +323,12 @@ function hasPrecisionCompanion() {
   var unc = companionUncVars(S.model, S.varName);
   return !!(unc.precision_lower || unc.precision_upper);
 }
+// Variable order for the pickers: core variables first, then the rest; each alphabetical.
+function varGroups(model) {
+  var sorted = model.varNames.slice().sort(function (a, b) { return a.toLowerCase().localeCompare(b.toLowerCase()); });
+  return { core: sorted.filter(function (n) { return CORE_VARS.indexOf(n) >= 0; }),
+           rest: sorted.filter(function (n) { return CORE_VARS.indexOf(n) < 0; }) };
+}
 // per-variable default colormap
 function defaultCmapFor(v){
   if (/chl/i.test(v)) return 'greens';       // chlorophyll
@@ -370,8 +389,12 @@ var S = {
   // Compare mode: a second dataset on the same grid (see compareOn). Its section and map
   // use the same selections, conditions mask and weighting as dataset 1.
   model2: null, secArr2: null, mapArr2: null,
-  regMode: 'map',   // regression points: 'map' (lat×lon cells) or 'section' (depth×month cells)
-  cmpHL: null       // highlighted regression point {kind, r, c}, outlined on the left panels
+  // Variable-compare mode: a second variable of dataset 1 (see varPairOn), shown in the same
+  // layout as compare mode but with its own colormap and colour range. The two modes are exclusive.
+  varName2: null, cmap2: 'reds', secLim2: [0, 1], mapLim2: [0, 1],
+  regMode: 'map',   // regression points: 'map' (lat×lon cells), 'section' (depth×month cells) or 'cells' (every 4-D cell)
+  regColor: 'none', // colour the selected regression points by 'depth' | 'lat' | 'lon', or 'none'
+  cmpHL: null       // highlighted regression point {kind, r, c} (map/section) or {kind:'cells', p, y, x, m}
 };
 
 function fmtLat(v){ return (Math.abs(v)).toFixed(0) + (v>=0?'°N':'°S'); }
@@ -385,15 +408,16 @@ function capitalize(s){ return s ? s.charAt(0).toUpperCase() + s.slice(1) : s; }
 function updateVarDesc(){
   var el = document.getElementById('varDesc');
   if (!S.model || !S.varName) { el.textContent = ''; return; }
-  var desc = S.model.vars[S.varName].long_name;
-  el.textContent = (desc && desc !== S.varName) ? capitalize(desc) : '';
+  var describe = function (n) { var desc = S.model.vars[n].long_name; return (desc && desc !== n) ? capitalize(desc) : ''; };
+  // with a variable 2, describe both (one per line), numbered like the panels
+  el.textContent = varPairOn() ? '1: ' + (describe(S.varName) || S.varName) + '\n2: ' + (describe(S.varName2) || S.varName2)
+                               : describe(S.varName);
   syncVarDescWidth();
 }
-// Wrap the variable description to the Variable selector's own rendered
-// width (which varies with the selected option's text) rather than a fixed
-// guess. Re-run on resize too, in case that changes the select's width.
+// Wrap the variable description to the Variables picker's rendered width
+// rather than a fixed guess. Re-run on resize too, in case that changes it.
 function syncVarDescWidth(){
-  var sel = document.getElementById('varSel'), el = document.getElementById('varDesc');
+  var sel = document.getElementById('varPicker'), el = document.getElementById('varDesc');
   if (sel.offsetWidth) el.style.maxWidth = sel.offsetWidth + 'px';
 }
 
@@ -545,9 +569,7 @@ function loadModelFromBuffer(ab, name, source, gen) {
     }
     S.model = model;
     // variable dropdown — core variables first, then the rest; each alphabetical
-    var sortedNames = model.varNames.slice().sort(function (a, b) { return a.toLowerCase().localeCompare(b.toLowerCase()); });
-    var core = sortedNames.filter(function (n) { return CORE_VARS.indexOf(n) >= 0; });
-    var rest = sortedNames.filter(function (n) { return CORE_VARS.indexOf(n) < 0; });
+    var groups = varGroups(model), core = groups.core, rest = groups.rest;
     var orderedNames = core.concat(rest);
     var vs = document.getElementById('varSel');
     vs.innerHTML = '';
@@ -574,7 +596,10 @@ function loadModelFromBuffer(ab, name, source, gen) {
       document.getElementById('cmapSel').value = S.cmap;
     }
     vs.value = S.varName;
+    // variable 2 is kept too when the new file has it
+    if (S.varName2 && (!model.vars[S.varName2] || S.varName2 === S.varName)) S.varName2 = null;
     updateVarDesc();
+    renderVarPicker();
     var nopt = document.getElementById('weightNbbp');
     nopt.disabled = !model.vars.n_bbp;
     if (nopt.disabled && S.weightMode === 'n_bbp') S.weightMode = 'physical';
@@ -641,10 +666,11 @@ function recomputeAll() {
   S.mapArr = GVCore.mapReduce(m, S.varName, S.keep, S.strict,
     GVCore.selCells(S.boxTD.set, s.month), S.weightMode, S.mapWeight);
   S.secArr2 = S.mapArr2 = null;
-  if (compareOn() && S.model2.vars[S.varName]) {
-    S.secArr2 = GVCore.sectionReduce(S.model2, S.varName, S.keep, S.strict,
+  var src2 = secondSource();
+  if (src2) {
+    S.secArr2 = GVCore.sectionReduce(src2.model, src2.varName, S.keep, S.strict,
       GVCore.selCells(S.boxLL.set, s.lon), S.weightMode, null);
-    S.mapArr2 = GVCore.mapReduce(S.model2, S.varName, S.keep, S.strict,
+    S.mapArr2 = GVCore.mapReduce(src2.model, src2.varName, S.keep, S.strict,
       GVCore.selCells(S.boxTD.set, s.month), S.weightMode, null);
   }
   recomputeProfiles();
@@ -666,7 +692,7 @@ function recomputeAll() {
       // (a clipped line reads as broken), so their own extrema are folded in
       // separately below.
       var heatmaps = [secArrDeep, S.mapArr];
-      if (S.secArr2) heatmaps.push(maskShallowSection(S.secArr2, s.depth, s.month, topRow), S.mapArr2);
+      if (compareOn() && S.secArr2) heatmaps.push(maskShallowSection(S.secArr2, s.depth, s.month, topRow), S.mapArr2);
       if (S.extraPanels) heatmaps.push(S.depthLatArr, S.latMonthArr);
       if (S.model.hasYear && S.yearDepthArr) heatmaps.push(S.yearDepthArr);
       var marginals = [];
@@ -694,8 +720,9 @@ function recomputeAll() {
       setAllLimits(padMax(safeLimits(lim, S.log), 0.05, S.log));
     } else {
       // compare mode: the two datasets' sections share one scale, and so do the two maps
-      S.secLim = safeLimits(GVCore.robustLimits(S.secArr2 ? concatArrays([S.secArr, S.secArr2]) : S.secArr, 0.02, 0.98, S.log), S.log);
-      S.mapLim = safeLimits(GVCore.robustLimits(S.mapArr2 ? concatArrays([S.mapArr, S.mapArr2]) : S.mapArr, 0.02, 0.98, S.log), S.log);
+      var cmp = compareOn() && S.secArr2;
+      S.secLim = safeLimits(GVCore.robustLimits(cmp ? concatArrays([S.secArr, S.secArr2]) : S.secArr, 0.02, 0.98, S.log), S.log);
+      S.mapLim = safeLimits(GVCore.robustLimits(cmp ? concatArrays([S.mapArr, S.mapArr2]) : S.mapArr, 0.02, 0.98, S.log), S.log);
       S.secMonthLim = fullArrayLimits(S.secMonthArr, S.log);
       S.secDepthLim = fullArrayLimits(S.secDepthArr, S.log);
       S.mapLonLim = fullArrayLimits(S.mapLonArr, S.log);
@@ -727,6 +754,7 @@ function recomputeAll() {
   } else {
     setAllLimits([S.vmin, S.vmax]);
   }
+  setSecondLimits();
   updateTitles();
   updatePrecisionToggle();
   draw();
@@ -991,10 +1019,11 @@ function updateTitles() {
     'lat ' + edgeRunsLabel(rcSec.rows, c.latEdges, fmtLat) + ',  lon ' + edgeRunsLabel(rcSec.cols, c.lonEdges, fmtLon);
   document.getElementById('mapTitle').textContent =
     monthRunsLabel(rcMap.cols) + ',  ' + depthRunsLabel(rcMap.rows);
-  if (compareOn()) {
+  if (pairOn()) {
     document.getElementById('secTitle2').textContent = document.getElementById('secTitle').textContent;
     document.getElementById('mapTitle2').textContent = document.getElementById('mapTitle').textContent;
-    var n1 = '1: ' + shortName(S.model.source) + ' — ', n2 = '2: ' + shortName(S.model2.source) + ' — ';
+    var vm = varPairOn();
+    var n1 = '1: ' + (vm ? S.varName : shortName(S.model.source)) + ' — ', n2 = '2: ' + (vm ? S.varName2 : shortName(S.model2.source)) + ' — ';
     document.getElementById('secDs1').textContent = n1; document.getElementById('mapDs1').textContent = n1;
     document.getElementById('secDs2').textContent = n2; document.getElementById('mapDs2').textContent = n2;
   }
@@ -1722,14 +1751,14 @@ var secGeom = null, secGeom2 = null;
 function drawSection(sharedH, two) {
   var cv = document.getElementById(two ? 'secCanvas2' : 'secCanvas');
   var cssW = cv.parentElement.clientWidth, cssH = sharedH || Math.max(300, Math.round(cssW * 0.7));
-  var prof = S.secProfiles && !two, arr = two ? S.secArr2 : S.secArr;
+  var prof = S.secProfiles && !two, arr = two ? S.secArr2 : S.secArr, lim = two ? S.secLim2 : S.secLim;
   var ctx = setupCanvas(cv, cssW, cssH), parts = panelRects(plotRect(cssW, cssH, prof), prof), R = parts.main;
   var m = S.model, nP = m.sizes.depth, nM = m.sizes.month;
   var dTop = m.coords.depthEdges[0], dBot = m.coords.depthEdges[nP];
   var monthAxis = buildRotatedAxis(R, nM, S.monthOffset, function () { return R.w / nM; });
   var yEdgePix = function (r) { return R.y + ((m.coords.depthEdges[r] - dTop) / (dBot - dTop)) * R.h; };
   ctx.clearRect(0,0,cssW,cssH);
-  if (arr) drawCells(ctx, R, nM, nP, monthAxis, yEdgePix, function (r, c) { return arr[r * nM + c]; }, S.secLim);
+  if (arr) drawCells(ctx, R, nM, nP, monthAxis, yEdgePix, function (r, c) { return arr[r * nM + c]; }, lim);
   else drawMissingVar(ctx, R);
   frame(ctx, R);
   // axes
@@ -1739,7 +1768,7 @@ function drawSection(sharedH, two) {
   var dticks=[0,200,400,600,800,1000,1200,1400,1600,1800,2000];
   dticks.forEach(function(dv){ if(dv>=dTop&&dv<=dBot){ var yy=R.y+((dv-dTop)/(dBot-dTop))*R.h; ctx.beginPath();ctx.moveTo(R.x-3,yy);ctx.lineTo(R.x,yy);ctx.stroke(); ctx.fillText(dv, R.x-6, yy);} });
   ctx.save(); ctx.translate(14, R.y+R.h/2); ctx.rotate(-Math.PI/2); ctx.textAlign='center'; ctx.textBaseline='middle'; ctx.fillText('depth (m)',0,0); ctx.restore();
-  drawColorbar(ctx, cssW, R, varLabel(), S.secLim);
+  drawColorbar(ctx, cssW, R, varLabel(two ? secondVarName() : null), lim);
   if (prof) {
     var rcTD = GVCore.selRowsCols(S.boxTD.set, nM);
     drawTopProfile(ctx, parts.top, S.secMonthArr, monthAxis, S.secMonthLim, rcTD.cols, uncOverlayArrays(S.secUnc, 'monthArr'));
@@ -1751,7 +1780,8 @@ function drawSection(sharedH, two) {
   // selection cells (depth=row, month=col) that drive the map + anchor marker
   drawCellSetOutline(ctx, S.boxTD.set, nM, monthAxis, yEdgePix);
   drawAnchorCell(ctx, S.boxTD.anchor, nM, monthAxis, yEdgePix);
-  if (S.cmpHL && S.cmpHL.kind === 'section' && compareOn()) drawHighlightCell(ctx, S.cmpHL.r, S.cmpHL.c, monthAxis, yEdgePix);
+  var hl = highlightCell('section');
+  if (hl) drawHighlightCell(ctx, hl[0], hl[1], monthAxis, yEdgePix);
   var g = { R:R, cv:cv, colAxis: monthAxis };
   if (two) secGeom2 = g; else secGeom = g;
 }
@@ -1761,7 +1791,7 @@ var mapGeom = null, mapGeom2 = null;
 function drawMap(sharedH, two) {
   var cv = document.getElementById(two ? 'mapCanvas2' : 'mapCanvas');
   var cssW = cv.parentElement.clientWidth, cssH = sharedH || Math.max(300, Math.round(cssW * 0.7));
-  var prof = S.mapProfiles && !two, arr = two ? S.mapArr2 : S.mapArr;
+  var prof = S.mapProfiles && !two, arr = two ? S.mapArr2 : S.mapArr, lim = two ? S.mapLim2 : S.mapLim;
   var ctx = setupCanvas(cv, cssW, cssH), parts = panelRects(plotRect(cssW, cssH, prof), prof), R = parts.main;
   var m = S.model, nY = m.sizes.lat, nX = m.sizes.lon;
   var latE = m.coords.latEdges, lonE = m.coords.lonEdges;
@@ -1770,7 +1800,7 @@ function drawMap(sharedH, two) {
   var lonAxis = buildRotatedAxis(R, nX, S.lonOffset, function (c) { return origLonPix(c + 1) - origLonPix(c); });
   var yEdgePix = function (r) { return R.y + (1 - (latE[r] - lat0) / (lat1 - lat0)) * R.h; }; // lat up
   ctx.clearRect(0,0,cssW,cssH);
-  if (arr) drawCells(ctx, R, nX, nY, lonAxis, yEdgePix, function (r, c) { return arr[r * nX + c]; }, S.mapLim);
+  if (arr) drawCells(ctx, R, nX, nY, lonAxis, yEdgePix, function (r, c) { return arr[r * nX + c]; }, lim);
   else drawMissingVar(ctx, R);
   drawLand(ctx, R, lonE, lon0, lon1, lat0, lat1);
   frame(ctx, R);
@@ -1782,7 +1812,7 @@ function drawMap(sharedH, two) {
   [-180,-120,-60,0,60,120,180].forEach(function(lv){ if(lv===-180 && S.lonOffset!==0) return; if(lv>=Math.min(lon0,lon1)&&lv<=Math.max(lon0,lon1)){ var xx=axisValuePix(lonAxis, lonE, lv); ctx.beginPath();ctx.moveTo(xx,R.y+R.h);ctx.lineTo(xx,R.y+R.h+3);ctx.stroke(); ctx.fillText(lv, xx, R.y+R.h+5);} });
   ctx.textAlign='right'; ctx.textBaseline='middle';
   [-60,-30,0,30,60].forEach(function(lv){ if(lv>=Math.min(lat0,lat1)&&lv<=Math.max(lat0,lat1)){ var yy=R.y+(1-(lv-lat0)/(lat1-lat0))*R.h; ctx.beginPath();ctx.moveTo(R.x-3,yy);ctx.lineTo(R.x,yy);ctx.stroke(); ctx.fillText(lv, R.x-6, yy);} });
-  drawColorbar(ctx, cssW, R, varLabel(), S.mapLim);
+  drawColorbar(ctx, cssW, R, varLabel(two ? secondVarName() : null), lim);
   if (prof) {
     var rcLL = GVCore.selRowsCols(S.boxLL.set, nX);
     drawTopProfile(ctx, parts.top, S.mapLonArr, lonAxis, S.mapLonLim, rcLL.cols, uncOverlayArrays(S.mapUnc, 'lonArr'));
@@ -1794,7 +1824,8 @@ function drawMap(sharedH, two) {
   // selection cells (lat=row, lon=col) that drive the section + anchor marker
   drawCellSetOutline(ctx, S.boxLL.set, nX, lonAxis, yEdgePix);
   drawAnchorCell(ctx, S.boxLL.anchor, nX, lonAxis, yEdgePix);
-  if (S.cmpHL && S.cmpHL.kind === 'map' && compareOn()) drawHighlightCell(ctx, S.cmpHL.r, S.cmpHL.c, lonAxis, yEdgePix);
+  var hl = highlightCell('map');
+  if (hl) drawHighlightCell(ctx, hl[0], hl[1], lonAxis, yEdgePix);
   var g = { R:R, cv:cv, colAxis: lonAxis, lat0:lat0, lat1:lat1 };
   if (two) mapGeom2 = g; else mapGeom = g;
 }
@@ -2116,7 +2147,7 @@ function drawYearTrend(sharedH) {
   }
 }
 
-function varLabel(){ var v=S.model.vars[S.varName]; return v.name + (v.units?' ('+v.units+')':'') + (S.log?' [log]':''); }
+function varLabel(name){ var v=S.model.vars[name || S.varName]; return v.name + (v.units?' ('+v.units+')':'') + (S.log?' [log]':''); }
 // Draw a label where unit exponents written as "^-2" or "^3" are rendered as
 // real superscripts (smaller, raised text) instead of the literal caret.
 // Respects the ctx's current font/fillStyle/baseline; x/y is the anchor
@@ -2167,15 +2198,15 @@ function draw(){
   var w = Math.min(document.getElementById('secCanvas').parentElement.clientWidth,
                     document.getElementById('mapCanvas').parentElement.clientWidth);
   var cssH = Math.max(300, Math.round(w * 0.7));
-  if (compareOn()) {
+  if (pairOn()) {
     // Compare mode: panels are 2/3 of their usual width (three columns instead of two) and
     // half their usual height, so the usual height is that of a panel 1.5 × as wide.
     cssH = Math.max(170, Math.round(Math.max(300, Math.round(w * 1.5 * 0.7)) / 2));
   }
   if (S.model.hasYear) cssH = Math.round(cssH * 0.75);   // shrink 25% vertically for the year panels above
   drawSection(cssH); drawMap(cssH);
-  if (compareOn()) {
-    drawSection(cssH, true); drawMap(cssH, true);
+  if (pairOn()) {
+    withSecondCmap(function () { drawSection(cssH, true); drawMap(cssH, true); });
     var top = document.getElementById('regCanvas').getBoundingClientRect().top,
       bottom = document.getElementById('mapCanvas2').getBoundingClientRect().bottom,
       info = document.getElementById('regInfo').getBoundingClientRect();
@@ -2239,7 +2270,7 @@ function drawHighlightCell(ctx, r, c, colAxis, rowPix) {
 }
 // Switch the page between the normal and the compare layout (dataset 2 loaded on dataset 1's grid).
 function updateCompareLayout() {
-  var on = compareOn();
+  var on = pairOn();
   document.getElementById('plots').classList.toggle('compare', on);
   // marginal and extra panels are dataset-1 only; they are switched off while comparing
   ['secProfiles', 'mapProfiles', 'extraPanels'].forEach(function (id) {
@@ -2251,18 +2282,155 @@ function updateCompareLayout() {
   if (!on) S.cmpHL = null;
   if (S.model2 && !on) setStatus('Dataset 2 (' + shortName(S.model2.source) + ') is not on dataset 1\'s grid — not compared.', 'error');
 }
-// Points of the 1 vs 2 regression: the map's lat×lon cells or the section's depth×month cells,
-// where both datasets have a value (and a positive one on a log scale).
-function regressionPoints() {
-  if (!compareOn() || !S.secArr2) return null;
-  var map = S.regMode === 'map', a1 = map ? S.mapArr : S.secArr, a2 = map ? S.mapArr2 : S.secArr2;
-  var NC = map ? S.model.sizes.lon : S.model.sizes.month, pts = [];
-  for (var i = 0; i < a1.length; i++) {
-    var x = a1[i], y = a2[i];
-    if (!isFinite(x) || !isFinite(y) || (S.log && (x <= 0 || y <= 0))) continue;
-    pts.push({ r: Math.floor(i / NC), c: i % NC, x: x, y: y });
+// ---------- variable compare (variable 2 of dataset 1) ----------
+// Exclusive with dataset compare: choosing either second item removes the other.
+function varPairOn() { return !!(S.model && S.varName2 && S.model.vars[S.varName2] && !compareOn()); }
+function pairOn() { return compareOn() || varPairOn(); }
+// What the second row shows: dataset 2's copy of the variable, or variable 2 of dataset 1.
+function secondSource() {
+  if (compareOn()) return S.model2.vars[S.varName] ? { model: S.model2, varName: S.varName } : null;
+  if (varPairOn()) return { model: S.model, varName: S.varName2 };
+  return null;
+}
+function secondVarName() { return varPairOn() ? S.varName2 : S.varName; }
+// Draw with variable 2's colormap (dataset 2 shares dataset 1's); selColor follows it too.
+function withSecondCmap(fn) {
+  var keep = S.cmap;
+  if (varPairOn()) S.cmap = S.cmap2;
+  try { fn(); } finally { S.cmap = keep; }
+}
+// Second-row colour ranges. Dataset 2 shares dataset 1's scales; variable 2 (other units)
+// gets its own, auto-fitted whatever the range mode, linked across its section and map
+// when "link panels" is on (shallow water above the selected depths left out, as for 1).
+function setSecondLimits() {
+  if (!S.secArr2) return;
+  if (!varPairOn()) { S.secLim2 = S.secLim; S.mapLim2 = S.mapLim; return; }
+  var s = S.model.sizes, rows = GVCore.selRowsCols(S.boxTD.set, s.month).rows;
+  if (S.linkScales) {
+    var sec = maskShallowSection(S.secArr2, s.depth, s.month, rows.length ? rows[0] : 0);
+    S.secLim2 = S.mapLim2 = safeLimits(GVCore.robustLimits(concatArrays([sec, S.mapArr2]), 0.02, 0.98, S.log), S.log);
+  } else {
+    S.secLim2 = safeLimits(GVCore.robustLimits(S.secArr2, 0.02, 0.98, S.log), S.log);
+    S.mapLim2 = safeLimits(GVCore.robustLimits(S.mapArr2, 0.02, 0.98, S.log), S.log);
   }
-  return { kind: map ? 'map' : 'section', pts: pts };
+}
+
+// ---------- 1 vs 2 regression ----------
+// Points: the map's lat×lon cells, the section's depth×month cells, or every individual
+// depth×lat×lon×month cell ('cells', no averaging), where both have a value (positive on
+// a log scale). A point is selected (sel=1) when its cell is inside the selection on the
+// left panels — the map box for map cells, the section box for section cells, both boxes
+// and the conditions mask for 4-D cells. Only selected points are coloured, set the axis
+// ranges and enter the fit; the rest are drawn grey for context.
+// Columns are typed arrays (a 4-D regression can have ~10^6 points); idx is the point's
+// flat index in its own grid (lat*nX+lon, depth*nM+month, or the 4-D data index).
+function maskFromSet(set, n) {
+  var out = new Uint8Array(n);
+  for (var k in set) out[+k] = 1;
+  return out;
+}
+function regressionPoints() {
+  var src2 = secondSource();
+  if (!pairOn() || !src2 || !S.secArr2) return null;
+  var s = S.model.sizes, nX = s.lon, nY = s.lat, nM = s.month, kind = S.regMode;
+  var ll = maskFromSet(S.boxLL.set, nY * nX), td = maskFromSet(S.boxTD.set, s.depth * nM), keep = S.keep, lg = S.log;
+  var a1, a2, N;
+  if (kind === 'cells') { a1 = S.model.vars[S.varName].data; a2 = src2.model.vars[src2.varName].data; }
+  else if (kind === 'section') { a1 = S.secArr; a2 = S.secArr2; }
+  else { kind = 'map'; a1 = S.mapArr; a2 = S.mapArr2; }
+  N = a1.length;
+  var X = new Float32Array(N), Y = new Float32Array(N), SEL = new Uint8Array(N), IDX = new Int32Array(N), n = 0;
+  for (var i = 0; i < N; i++) {
+    var x = a1[i], y = a2[i];
+    if (!isFinite(x) || !isFinite(y) || (lg && (x <= 0 || y <= 0))) continue;
+    var sel;
+    if (kind === 'cells') {
+      var mm = i % nM, t = (i - mm) / nM, xx = t % nX; t = (t - xx) / nX;
+      var yy = t % nY, p = (t - yy) / nY;
+      sel = ll[yy * nX + xx] && td[p * nM + mm] && (!keep || keep[i]);
+    } else sel = kind === 'map' ? ll[i] : td[i];
+    X[n] = x; Y[n] = y; SEL[n] = sel ? 1 : 0; IDX[n] = i; n++;
+  }
+  return { kind: kind, n: n, x: X.subarray(0, n), y: Y.subarray(0, n), sel: SEL.subarray(0, n), idx: IDX.subarray(0, n) };
+}
+// A point's grid position: {p (depth), y (lat), x (lon), m (month)}, with only the
+// dimensions its kind has.
+function regPointCell(kind, idx) {
+  var s = S.model.sizes;
+  if (kind === 'map') return { y: Math.floor(idx / s.lon), x: idx % s.lon };
+  if (kind === 'section') return { p: Math.floor(idx / s.month), m: idx % s.month };
+  var m = idx % s.month, t = (idx - m) / s.month, x = t % s.lon; t = (t - x) / s.lon;
+  var y = t % s.lat;
+  return { p: (t - y) / s.lat, y: y, x: x, m: m };
+}
+function regCellIndex(kind, q) {
+  var s = S.model.sizes;
+  if (kind === 'map') return q.y * s.lon + q.x;
+  if (kind === 'section') return q.p * s.month + q.m;
+  return ((q.p * s.lat + q.y) * s.lon + q.x) * s.month + q.m;
+}
+// The highlighted point's cell on a left panel as [row, col], or null.
+function highlightCell(panel) {
+  var h = S.cmpHL;
+  if (!h || !pairOn()) return null;
+  if (panel === 'map' && h.y != null) return [h.y, h.x];
+  if (panel === 'section' && h.p != null) return [h.p, h.m];
+  return null;
+}
+// Which colourings each point kind can show: map cells have no depth, section cells no lat/lon.
+function regColorAvailable(kind, col) {
+  return col === 'none' || kind === 'cells' || (kind === 'map' ? col !== 'depth' : col === 'depth');
+}
+function cellCentres(edges) {
+  var out = new Float64Array(edges.length - 1);
+  for (var i = 0; i < out.length; i++) out[i] = (edges[i] + edges[i + 1]) / 2;
+  return out;
+}
+function regColorLabel(col) { return col === 'depth' ? 'depth (m)' : col === 'lat' ? 'latitude (°N)' : 'longitude (°E)'; }
+// Draw the points: grey (unselected) first, then the selected ones on top. Few points are
+// drawn as circles; many (4-D cells) are rasterised into an image with alpha blending,
+// which is fast enough to redraw live while dragging a selection.
+var REG_RASTER_MIN = 20000;
+function drawRegPoints(ctx, R, P, X, Y, colorOf) {
+  var GREY = [150, 150, 150, 0.35], i;
+  if (P.n < REG_RASTER_MIN) {
+    var dot = function (k, c, rad) { ctx.fillStyle = 'rgba(' + (c[0] | 0) + ',' + (c[1] | 0) + ',' + (c[2] | 0) + ',' + c[3] + ')';
+      ctx.beginPath(); ctx.arc(X[k], Y[k], rad, 0, 2 * Math.PI); ctx.fill(); };
+    for (i = 0; i < P.n; i++) if (!P.sel[i]) dot(i, GREY, 2.3);
+    for (i = 0; i < P.n; i++) if (P.sel[i]) dot(i, colorOf(i), 2.6);
+    return;
+  }
+  var dpr = window.devicePixelRatio || 1, W = Math.max(1, Math.round(R.w * dpr)), H = Math.max(1, Math.round(R.h * dpr));
+  var off = document.createElement('canvas'); off.width = W; off.height = H;
+  var octx = off.getContext('2d'), img = octx.createImageData(W, H), buf = img.data;
+  var sz = Math.max(2, Math.round(1.6 * dpr));
+  var plot = function (k, c) {
+    var x0 = Math.round((X[k] - R.x) * dpr - sz / 2), y0 = Math.round((Y[k] - R.y) * dpr - sz / 2), a = c[3];
+    for (var yy = Math.max(0, y0); yy < Math.min(H, y0 + sz); yy++) {
+      for (var xx = Math.max(0, x0); xx < Math.min(W, x0 + sz); xx++) {
+        var o = (yy * W + xx) * 4, da = buf[o + 3] / 255, oa = a + da * (1 - a), f = da * (1 - a);
+        buf[o] = (c[0] * a + buf[o] * f) / oa; buf[o + 1] = (c[1] * a + buf[o + 1] * f) / oa;
+        buf[o + 2] = (c[2] * a + buf[o + 2] * f) / oa; buf[o + 3] = oa * 255;
+      }
+    }
+  };
+  for (i = 0; i < P.n; i++) if (!P.sel[i]) plot(i, GREY);
+  for (i = 0; i < P.n; i++) if (P.sel[i]) plot(i, colorOf(i));
+  octx.putImageData(img, 0, 0);
+  ctx.drawImage(off, R.x, R.y, R.w, R.h);
+}
+// Horizontal colour key for the point colouring, centred below the x-axis label.
+var REG_KEY_H = 40;
+function drawRegColorKey(ctx, R, label, lo, hi) {
+  var bw = Math.min(160, R.w * 0.6), bh = 8, bx = R.x + (R.w - bw) / 2, by = R.y + R.h + 52;
+  var g = ctx.createLinearGradient(bx, 0, bx + bw, 0);
+  for (var k = 0; k <= 10; k++) { var c = ramp(CMAPS.viridis, k / 10); g.addColorStop(k / 10, 'rgb(' + (c[0] | 0) + ',' + (c[1] | 0) + ',' + (c[2] | 0) + ')'); }
+  ctx.fillStyle = g; ctx.fillRect(bx, by, bw, bh);
+  ctx.strokeStyle = '#888'; ctx.lineWidth = 1; ctx.strokeRect(bx + .5, by + .5, bw, bh);
+  ctx.font = '10px sans-serif'; ctx.fillStyle = '#333'; ctx.textBaseline = 'bottom'; ctx.textAlign = 'center';
+  ctx.fillText(label, bx + bw / 2, by - 3);
+  ctx.textBaseline = 'middle'; ctx.textAlign = 'right'; ctx.fillText(fmtNum(lo), bx - 4, by + bh / 2);
+  ctx.textAlign = 'left'; ctx.fillText(fmtNum(hi), bx + bw + 4, by + bh / 2);
 }
 function olsFit(xs, ys) {
   var n = xs.length, mx = 0, my = 0, sxx = 0, sxy = 0, syy = 0;
@@ -2281,100 +2449,152 @@ function niceTicks(lo, hi, n) {
   for (var v = Math.ceil(lo / step) * step; v <= hi + step * 1e-9; v += step) out.push(Math.abs(v) < step * 1e-9 ? 0 : v);
   return out;
 }
+var REG_KIND_LABEL = { map: 'map cells', section: 'section cells', cells: '4-D cells' };
 var regGeom = null;
 function drawRegression(cssH) {
   var cv = document.getElementById('regCanvas'), cssW = cv.parentElement.clientWidth - 8;
   var ctx = setupCanvas(cv, cssW, cssH);
   ctx.clearRect(0, 0, cssW, cssH);
-  var R = { x: 62, y: 12, w: cssW - 62 - 14, h: cssH - 12 - 48 };
+  var vm = varPairOn(), P = regressionPoints();
+  var colBy = P && regColorAvailable(P.kind, S.regColor) ? S.regColor : 'none';
+  var R = { x: 62, y: 12, w: cssW - 62 - 14, h: cssH - 12 - 48 - (colBy !== 'none' ? REG_KEY_H : 0) };
   R.h = Math.min(R.h, Math.max(120, R.w * 1.1));   // keep it near square when the column is narrow
-  var P = regressionPoints();
+  var pairName = vm ? S.varName + ' vs ' + S.varName2 : 'dataset 1 vs 2';
   regGeom = null;
+  // grey out colourings this point kind lacks; the highlighted button shows the colouring
+  // actually drawn (S.regColor is kept, so it returns when switching back)
+  document.querySelectorAll('#regColorSeg button').forEach(function (b) {
+    b.disabled = !regColorAvailable(S.regMode, b.dataset.v);
+    b.classList.toggle('on', b.dataset.v === (regColorAvailable(S.regMode, S.regColor) ? S.regColor : 'none'));
+  });
   axisStyle(ctx);
-  if (!P || !P.pts.length) {
+  if (!P || !P.n) {
     ctx.fillStyle = '#9aa0a8'; ctx.font = '13px sans-serif'; ctx.textAlign = 'center';
-    ctx.fillText(P ? 'no cells with values in both datasets' : 'no dataset 2 values for ' + S.varName, cssW / 2, cssH / 2);
-    document.getElementById('regTitle').textContent = 'dataset 1 vs 2';
+    ctx.fillText(P ? 'no cells with values in both' : 'no dataset 2 values for ' + S.varName, cssW / 2, cssH / 2);
+    document.getElementById('regTitle').textContent = pairName;
     return;
   }
   var t = S.log ? function (v) { return Math.log(v) / Math.LN10; } : function (v) { return v; };
-  var xs = P.pts.map(function (p) { return t(p.x); }), ys = P.pts.map(function (p) { return t(p.y); });
-  // one range for both axes (2–98 % of both, widened to every point), so the 1:1 line is the diagonal
-  var lo = Infinity, hi = -Infinity;
-  xs.concat(ys).forEach(function (v) { if (v < lo) lo = v; if (v > hi) hi = v; });
-  if (!(hi > lo)) { hi = lo + 1; }
-  var pad = 0.04 * (hi - lo); lo -= pad; hi += pad;
-  var px = function (v) { return R.x + (v - lo) / (hi - lo) * R.w; }, py = function (v) { return R.y + R.h - (v - lo) / (hi - lo) * R.h; };
+  // Axis ranges from the selected points only (all points if none is selected). Comparing
+  // datasets, both axes share one range so the 1:1 line is the diagonal; comparing
+  // variables (different units) each axis has its own.
+  var nSel = 0, i;
+  for (i = 0; i < P.n; i++) nSel += P.sel[i];
+  var xlo = Infinity, xhi = -Infinity, ylo = Infinity, yhi = -Infinity;
+  for (i = 0; i < P.n; i++) {
+    if (nSel && !P.sel[i]) continue;
+    var tx = t(P.x[i]), ty = t(P.y[i]);
+    if (tx < xlo) xlo = tx; if (tx > xhi) xhi = tx; if (ty < ylo) ylo = ty; if (ty > yhi) yhi = ty;
+  }
+  if (!vm) { xlo = ylo = Math.min(xlo, ylo); xhi = yhi = Math.max(xhi, yhi); }
+  var padRange = function (lo, hi) { if (!(hi > lo)) hi = lo + 1; var pd = 0.04 * (hi - lo); return [lo - pd, hi + pd]; };
+  var xr = padRange(xlo, xhi), yr = padRange(ylo, yhi);
+  var px = function (v) { return R.x + (v - xr[0]) / (xr[1] - xr[0]) * R.w; }, py = function (v) { return R.y + R.h - (v - yr[0]) / (yr[1] - yr[0]) * R.h; };
   // grid + ticks
-  var ticks = S.log ? (function () { var o = []; for (var e = Math.ceil(lo); e <= Math.floor(hi); e++) o.push(e); return o.length >= 2 ? o : niceTicks(lo, hi, 5); })() : niceTicks(lo, hi, 5);
+  var ticksFor = function (lo, hi) {
+    if (!S.log) return niceTicks(lo, hi, 5);
+    var o = []; for (var e = Math.ceil(lo); e <= Math.floor(hi); e++) o.push(e);
+    return o.length >= 2 ? o : niceTicks(lo, hi, 5);
+  };
+  var xt = ticksFor(xr[0], xr[1]), yt = ticksFor(yr[0], yr[1]);
   var lab = function (v) { return S.log ? (Number.isInteger(v) ? '1e' + v : fmtNum(Math.pow(10, v))) : fmtNum(v); };
   ctx.strokeStyle = '#eceef1'; ctx.lineWidth = 1;
-  ticks.forEach(function (v) { ctx.beginPath(); ctx.moveTo(px(v), R.y); ctx.lineTo(px(v), R.y + R.h); ctx.moveTo(R.x, py(v)); ctx.lineTo(R.x + R.w, py(v)); ctx.stroke(); });
+  xt.forEach(function (v) { ctx.beginPath(); ctx.moveTo(px(v), R.y); ctx.lineTo(px(v), R.y + R.h); ctx.stroke(); });
+  yt.forEach(function (v) { ctx.beginPath(); ctx.moveTo(R.x, py(v)); ctx.lineTo(R.x + R.w, py(v)); ctx.stroke(); });
   axisStyle(ctx);
   ctx.textAlign = 'center'; ctx.textBaseline = 'top';
-  ticks.forEach(function (v) { ctx.fillText(lab(v), px(v), R.y + R.h + 4); });
+  xt.forEach(function (v) { ctx.fillText(lab(v), px(v), R.y + R.h + 4); });
   ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
-  ticks.forEach(function (v) { ctx.fillText(lab(v), R.x - 5, py(v)); });
-  var unit = S.model.vars[S.varName].units ? ' (' + S.model.vars[S.varName].units + ')' : '';
+  yt.forEach(function (v) { ctx.fillText(lab(v), R.x - 5, py(v)); });
+  var unitOf = function (n) { var u = S.model.vars[n].units; return u ? ' (' + u + ')' : ''; };
+  var xLabel = vm ? S.varName + unitOf(S.varName) : S.varName + ', dataset 1' + unitOf(S.varName);
+  var yLabel = vm ? S.varName2 + unitOf(S.varName2) : S.varName + ', dataset 2' + unitOf(S.varName);
   ctx.textAlign = 'center'; ctx.textBaseline = 'top';
-  drawLabelWithSup(ctx, S.varName + ', dataset 1' + unit, R.x + R.w / 2, R.y + R.h + 20, 'center');
+  drawLabelWithSup(ctx, xLabel, R.x + R.w / 2, R.y + R.h + 20, 'center');
   ctx.save(); ctx.translate(14, R.y + R.h / 2); ctx.rotate(-Math.PI / 2); ctx.textBaseline = 'middle';
-  drawLabelWithSup(ctx, S.varName + ', dataset 2' + unit, 0, 0, 'center'); ctx.restore();
-  // points, 1:1 line, fit
-  ctx.save(); ctx.beginPath(); ctx.rect(R.x, R.y, R.w, R.h); ctx.clip();
-  ctx.fillStyle = 'rgba(37, 99, 235, 0.45)';
-  var geomPts = [];
-  for (var i = 0; i < xs.length; i++) {
-    var X = px(xs[i]), Y = py(ys[i]);
-    ctx.beginPath(); ctx.arc(X, Y, 2.6, 0, 2 * Math.PI); ctx.fill();
-    geomPts.push({ x: X, y: Y, p: P.pts[i] });
+  drawLabelWithSup(ctx, yLabel, 0, 0, 'center'); ctx.restore();
+  // pixel positions, the selected points' (transformed) values for the fit, and colours
+  var X = new Float32Array(P.n), Y = new Float32Array(P.n), fx = [], fy = [], ratios = [];
+  for (i = 0; i < P.n; i++) {
+    var vx = t(P.x[i]), vy = t(P.y[i]);
+    X[i] = px(vx); Y[i] = py(vy);
+    if (P.sel[i]) { fx.push(vx); fy.push(vy); ratios.push(P.y[i] / P.x[i]); }
   }
-  ctx.strokeStyle = '#555'; ctx.setLineDash([5, 4]); ctx.lineWidth = 1;
-  ctx.beginPath(); ctx.moveTo(px(lo), py(lo)); ctx.lineTo(px(hi), py(hi)); ctx.stroke(); ctx.setLineDash([]);
-  var fit = olsFit(xs, ys);
+  var colorOf, cLo = Infinity, cHi = -Infinity;
+  if (colBy === 'none') { var BLUE = [37, 99, 235, 0.5]; colorOf = function () { return BLUE; }; }
+  else {
+    var centres = cellCentres(S.model.coords[colBy + 'Edges']), dimKey = colBy === 'depth' ? 'p' : colBy === 'lat' ? 'y' : 'x';
+    var cval = new Float64Array(P.n);
+    for (i = 0; i < P.n; i++) {
+      if (!P.sel[i]) continue;
+      cval[i] = centres[regPointCell(P.kind, P.idx[i])[dimKey]];
+      if (cval[i] < cLo) cLo = cval[i]; if (cval[i] > cHi) cHi = cval[i];
+    }
+    var span = cHi > cLo ? cHi - cLo : 1;
+    colorOf = function (k) { var rgb = ramp(CMAPS.viridis, (cval[k] - cLo) / span); return [rgb[0], rgb[1], rgb[2], 0.75]; };
+  }
+  ctx.save(); ctx.beginPath(); ctx.rect(R.x, R.y, R.w, R.h); ctx.clip();
+  drawRegPoints(ctx, R, P, X, Y, colorOf);
+  if (!vm) {   // 1:1 line (same units only)
+    ctx.strokeStyle = '#555'; ctx.setLineDash([5, 4]); ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(px(xr[0]), py(xr[0])); ctx.lineTo(px(xr[1]), py(xr[1])); ctx.stroke(); ctx.setLineDash([]);
+  }
+  var fit = olsFit(fx, fy);
   if (fit) {
     ctx.strokeStyle = '#d6336c'; ctx.lineWidth = 1.6;
-    ctx.beginPath(); ctx.moveTo(px(lo), py(fit.a + fit.b * lo)); ctx.lineTo(px(hi), py(fit.a + fit.b * hi)); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(px(xr[0]), py(fit.a + fit.b * xr[0])); ctx.lineTo(px(xr[1]), py(fit.a + fit.b * xr[1])); ctx.stroke();
   }
-  var hl = null;
-  if (S.cmpHL && S.cmpHL.kind === P.kind) geomPts.forEach(function (g) { if (g.p.r === S.cmpHL.r && g.p.c === S.cmpHL.c) hl = g; });
-  if (hl) {
-    ctx.lineWidth = 2; ctx.strokeStyle = '#000'; ctx.beginPath(); ctx.arc(hl.x, hl.y, 6, 0, 2 * Math.PI); ctx.stroke();
-    ctx.strokeStyle = '#fff'; ctx.lineWidth = 1; ctx.beginPath(); ctx.arc(hl.x, hl.y, 6, 0, 2 * Math.PI); ctx.stroke();
+  var hl = -1;
+  if (S.cmpHL && S.cmpHL.kind === P.kind) {
+    var want = regCellIndex(P.kind, S.cmpHL);
+    for (i = 0; i < P.n; i++) if (P.idx[i] === want) { hl = i; break; }
+  }
+  if (hl >= 0) {
+    ctx.lineWidth = 2; ctx.strokeStyle = '#000'; ctx.beginPath(); ctx.arc(X[hl], Y[hl], 6, 0, 2 * Math.PI); ctx.stroke();
+    ctx.strokeStyle = '#fff'; ctx.lineWidth = 1; ctx.beginPath(); ctx.arc(X[hl], Y[hl], 6, 0, 2 * Math.PI); ctx.stroke();
   }
   ctx.restore();
   frame(ctx, R);
-  // statistics, top left inside the panel
-  var ratios = P.pts.map(function (p) { return p.y / p.x; }).filter(function (v) { return isFinite(v); }).sort(function (a, b) { return a - b; });
+  // statistics (selected points only), top left inside the panel
+  ratios = ratios.filter(function (v) { return isFinite(v); }).sort(function (a, b) { return a - b; });
   var medRatio = ratios.length ? ratios[Math.floor((ratios.length - 1) / 2)] : NaN;
+  var nNote = nSel < P.n ? ' (of ' + P.n + ')' : '';
   var lines = [];
   if (fit) lines.push((S.log ? 'log₁₀ fit: ' : 'fit: ') + 'y = ' + fmtNum(fit.b) + 'x ' + (fit.a < 0 ? '− ' : '+ ') + fmtNum(Math.abs(fit.a)),
-    'r² = ' + fit.r2.toFixed(3) + ',  n = ' + fit.n);
-  else lines.push('n = ' + P.pts.length);
+    'r² = ' + fit.r2.toFixed(3) + ',  n = ' + fit.n + nNote);
+  else lines.push('n = ' + nSel + nNote);
   lines.push('median 2/1 = ' + fmtNum(medRatio));
+  if (!nSel) lines.push('no selected cells — all grey');
   ctx.font = '11px sans-serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'top';
   var bw = 0; lines.forEach(function (l) { bw = Math.max(bw, ctx.measureText(l).width); });
   ctx.fillStyle = 'rgba(255,255,255,0.85)'; ctx.fillRect(R.x + 4, R.y + 4, bw + 10, lines.length * 14 + 6);
   ctx.fillStyle = '#222'; lines.forEach(function (l, k) { ctx.fillText(l, R.x + 9, R.y + 7 + k * 14); });
+  if (colBy !== 'none' && nSel) drawRegColorKey(ctx, R, regColorLabel(colBy), cLo, cHi);
   // key
-  ctx.textAlign = 'right'; ctx.fillStyle = '#555'; ctx.fillText('- - 1:1', R.x + R.w - 6, R.y + R.h - 30);
+  ctx.font = '11px sans-serif'; ctx.textAlign = 'right'; ctx.textBaseline = 'top';
+  if (!vm) { ctx.fillStyle = '#555'; ctx.fillText('- - 1:1', R.x + R.w - 6, R.y + R.h - 30); }
   ctx.fillStyle = '#d6336c'; ctx.fillText('— least squares', R.x + R.w - 6, R.y + R.h - 16);
-  regGeom = { R: R, cv: cv, pts: geomPts, kind: P.kind };
-  var c = S.model.coords, title = (P.kind === 'map' ? 'map cells' : 'section cells') + ': dataset 1 vs 2';
-  if (hl) {
-    var q = hl.p;
-    title = P.kind === 'map'
-      ? fmtLat((c.latEdges[q.r] + c.latEdges[q.r + 1]) / 2) + ' ' + fmtLon((c.lonEdges[q.c] + c.lonEdges[q.c + 1]) / 2)
-      : MONTHS[q.c] + ', ' + Math.round(c.depthEdges[q.r]) + '–' + Math.round(c.depthEdges[q.r + 1]) + ' m';
-    title += ':  1 = ' + fmtNum(q.x) + ',  2 = ' + fmtNum(q.y);
+  regGeom = { R: R, cv: cv, P: P, X: X, Y: Y };
+  var title = REG_KIND_LABEL[P.kind] + ': ' + pairName;
+  if (hl >= 0) {
+    var q = regPointCell(P.kind, P.idx[hl]), co = S.model.coords, parts = [];
+    if (q.y != null) parts.push(fmtLat((co.latEdges[q.y] + co.latEdges[q.y + 1]) / 2) + ' ' + fmtLon((co.lonEdges[q.x] + co.lonEdges[q.x + 1]) / 2));
+    if (q.m != null) parts.push(MONTHS[q.m] + ', ' + Math.round(co.depthEdges[q.p]) + '–' + Math.round(co.depthEdges[q.p + 1]) + ' m');
+    title = parts.join(', ') + ':  1 = ' + fmtNum(P.x[hl]) + ',  2 = ' + fmtNum(P.y[hl]);
   }
   document.getElementById('regTitle').textContent = title;
 }
 function regressionClick(ev) {
   if (!regGeom) return;
-  var p = relpos(ev, regGeom.cv), best = null, bd = 10 * 10 + 1e-9;
-  regGeom.pts.forEach(function (g) { var d = (g.x - p.x) * (g.x - p.x) + (g.y - p.y) * (g.y - p.y); if (d < bd) { bd = d; best = g; } });
-  S.cmpHL = best ? { kind: regGeom.kind, r: best.p.r, c: best.p.c } : null;
+  var g = regGeom, p = relpos(ev, g.cv), best = -1, bd = 10 * 10 + 1e-9;
+  for (var i = 0; i < g.P.n; i++) {
+    var x = g.X[i], y = g.Y[i];
+    if (x < g.R.x || x > g.R.x + g.R.w || y < g.R.y || y > g.R.y + g.R.h) continue;   // clipped off the plot
+    var d = (x - p.x) * (x - p.x) + (y - p.y) * (y - p.y);
+    if (d < bd) { bd = d; best = i; }
+  }
+  if (best < 0) S.cmpHL = null;
+  else { S.cmpHL = regPointCell(g.P.kind, g.P.idx[best]); S.cmpHL.kind = g.P.kind; }
   draw();
 }
 
@@ -2550,8 +2770,8 @@ function setFocus(which) {
   Object.keys(FOCUS_CANVAS).forEach(function (k) {
     document.getElementById(FOCUS_CANVAS[k]).parentElement.classList.toggle('focused', which === k);
   });
-  document.getElementById('secCanvas2').parentElement.classList.toggle('focused', which === 'section' && compareOn());
-  document.getElementById('mapCanvas2').parentElement.classList.toggle('focused', which === 'map' && compareOn());
+  document.getElementById('secCanvas2').parentElement.classList.toggle('focused', which === 'section' && pairOn());
+  document.getElementById('mapCanvas2').parentElement.classList.toggle('focused', which === 'map' && pairOn());
 }
 
 // Keyboard config per focusable panel: how to fetch/commit its box, its
@@ -2739,9 +2959,11 @@ document.getElementById('fileIn').onchange = function(e){
 };
 document.getElementById('varSel').onchange = function(e){
   S.varName = e.target.value;
+  if (S.varName === S.varName2) { S.varName2 = null; S.cmpHL = null; updateCompareLayout(); }   // can't compare a variable with itself
   S.cmap = defaultCmapFor(S.varName);                       // apply the variable's default colormap
   document.getElementById('cmapSel').value = S.cmap;
   updateVarDesc();
+  renderVarPicker();
   recomputeAll();
 };
 document.getElementById('cmapSel').onchange = function(e){ S.cmap = e.target.value; draw(); };
@@ -2913,12 +3135,16 @@ function setModel2FromBuffer(ab, name, source, value, gen) {
     m2.source = source || name;
     if (m2.hasYear) GVCore.applyYearCollapse(m2, S.weightMode);
     if (S.model && !sameGrid(S.model, m2)) throw new Error('not on dataset 1\'s grid (' + m2.sizes.depth + '×' + m2.sizes.lat + '×' + m2.sizes.lon + '×' + m2.sizes.month + ')');
+    var hadVar2 = varPairOn();
     S.model2 = m2; S.cmpHL = null; cmpCtl.last = value;
+    S.varName2 = null;   // dataset compare and variable compare are exclusive
+    updateVarDesc(); renderVarPicker();
     if (loadCtl.localFiles[value]) loadCtl.localFiles[value].autoLabel = localDatasetMetadata(m2.globalAttrs, loadCtl.localFiles[value].file);
     document.getElementById('cmpSel').value = value;
     renderDatasetPicker();
     hideOverlay();
-    setStatus('Comparing with ' + name + (m2.vars[S.varName] ? '.' : ' — it has no ' + S.varName + '.'), 'ok');
+    setStatus('Comparing with ' + name + (m2.vars[S.varName] ? '.' : ' — it has no ' + S.varName + '.') +
+      (hadVar2 ? ' Variable 2 removed (compare either two datasets or two variables).' : ''), 'ok');
   } catch (e) {
     hideOverlay();
     setStatus('Dataset 2: could not use ' + name + ': ' + e.message, 'error');
@@ -2965,6 +3191,90 @@ document.getElementById('regSeg').onclick = function (e) {
   if (e.target.tagName !== 'BUTTON') return;
   segSet('regSeg', e.target); S.regMode = e.target.dataset.v; S.cmpHL = null; draw();
 };
+document.getElementById('regColorSeg').onclick = function (e) {
+  if (e.target.tagName !== 'BUTTON' || e.target.disabled) return;
+  segSet('regColorSeg', e.target); S.regColor = e.target.dataset.v; draw();
+};
+
+// ---------- variable picker: variable 1, and ⌘/Ctrl-click for variable 2 ----------
+function varSlot(n) {
+  return [S.varName === n ? '1' : '', varPairOn() && S.varName2 === n ? '2' : ''].filter(Boolean).join(', ');
+}
+function closeVarMenu() {
+  document.getElementById('varMenu').hidden = true;
+  document.getElementById('varToggle').setAttribute('aria-expanded', 'false');
+}
+// Set (or with null clear) variable 2. Loading it removes any dataset 2.
+function setVariable2(n) {
+  if (n && n === S.varName) { setStatus(n + ' is already variable 1.', 'error'); return; }
+  if (n && S.model2) {
+    S.model2 = null; cmpCtl.last = ''; cmpCtl.gen++;
+    document.getElementById('cmpSel').value = '';
+    renderDatasetPicker();
+    setStatus('Dataset 2 removed: comparing two variables of dataset 1 instead.', 'ok');
+  }
+  S.varName2 = n || null; S.cmpHL = null;
+  if (n) S.cmap2 = defaultCmapFor(n);
+  updateVarDesc(); renderVarPicker(); updateCompareLayout(); recomputeAll();
+}
+function chooseVariable(n, second) {
+  if (second) setVariable2(varPairOn() && S.varName2 === n ? null : n);
+  else { var sel = document.getElementById('varSel'); sel.value = n; sel.onchange({ target: sel }); }
+  closeVarMenu();
+  document.getElementById('varToggle').focus();
+}
+function renderVarPicker() {
+  var host = document.getElementById('varOptions');
+  host.innerHTML = '';
+  if (!S.model) { document.getElementById('varSummary').textContent = ''; return; }
+  document.getElementById('varSummary').textContent = S.varName + (varPairOn() ? '  vs  ' + S.varName2 : '');
+  function row(n) {
+    var b = document.createElement('button'); b.type = 'button'; b.className = 'datasetOption'; b.dataset.v = n;
+    var slot = varSlot(n), units = S.model.vars[n].units;
+    b.setAttribute('aria-label', n + (slot ? ', variable ' + slot : ''));
+    var badge = document.createElement('span'); badge.className = 'datasetBadge'; badge.textContent = slot; b.appendChild(badge);
+    var name = document.createElement('span'); name.textContent = n; b.appendChild(name);
+    if (units) { var u = document.createElement('span'); u.className = 'datasetDetail'; u.textContent = '(' + units + ')'; b.appendChild(u); }
+    b.onclick = function (e) { chooseVariable(n, e.metaKey || e.ctrlKey); };
+    host.appendChild(b);
+  }
+  function group(label) {
+    var h = document.createElement('div'); h.className = 'datasetGroup'; h.textContent = label; host.appendChild(h);
+  }
+  var g = varGroups(S.model);
+  if (g.core.length && g.rest.length) { group('Core variables'); g.core.forEach(row); group('Other variables'); g.rest.forEach(row); }
+  else g.core.concat(g.rest).forEach(row);
+  if (varPairOn()) {
+    var clear = document.createElement('button'); clear.type = 'button'; clear.className = 'datasetOption';
+    clear.textContent = 'Remove variable 2';
+    clear.onclick = function () { setVariable2(null); closeVarMenu(); document.getElementById('varToggle').focus(); };
+    host.appendChild(clear);
+  }
+}
+document.getElementById('varToggle').onclick = function() {
+  var menu = document.getElementById('varMenu');
+  if (!menu.hidden) { closeVarMenu(); return; }
+  if (!S.model) return;
+  renderVarPicker(); menu.hidden = false;
+  this.setAttribute('aria-expanded', 'true');
+  // start on variable 1, so a long list opens scrolled to it
+  var first = Array.from(document.getElementById('varOptions').querySelectorAll('button')).filter(function (b) { return b.dataset.v === S.varName; })[0];
+  if (first) first.focus();
+};
+document.addEventListener('click', function(e) {
+  if (e.composedPath().indexOf(document.getElementById('varPicker')) < 0) closeVarMenu();
+});
+document.getElementById('varPicker').addEventListener('keydown', function(e) {
+  if (e.key === 'Escape') { closeVarMenu(); document.getElementById('varToggle').focus(); e.preventDefault(); }
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    var buttons = Array.from(document.getElementById('varOptions').querySelectorAll('button'));
+    var i = buttons.indexOf(document.activeElement), step = e.key === 'ArrowDown' ? 1 : -1;
+    if (buttons.length) { buttons[(i + step + buttons.length) % buttons.length].focus(); e.preventDefault(); }
+  }
+});
+document.addEventListener('focusin', function(e) {
+  if (!document.getElementById('varPicker').contains(e.target)) closeVarMenu();
+});
 window.addEventListener('resize', function(){ draw(); syncVarDescWidth(); });
 
 initInteraction();
