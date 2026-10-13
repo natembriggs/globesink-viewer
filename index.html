@@ -23,6 +23,11 @@
   .seg { display:inline-flex; border:1px solid var(--line); border-radius:5px; overflow:hidden; }
   .seg button { border:0; border-radius:0; padding:4px 9px; background:#fff; }
   .seg button.on { background:var(--ink); color:#fff; }
+  .seg button + button { border-left:1px solid var(--line); }
+  .seg button:disabled { color:#b8bcc2; cursor:default; }
+  .seg button.on:disabled { background:#9aa0a8; color:#fff; }
+  /* on/off toggles (.tog) sit in a .seg so they look like the segmented controls */
+  .cond .seg button { padding:3px 7px; font-size:12px; }
   .datasetPicker { position:relative; width:280px; max-width:calc(100vw - 28px); }
   #varPicker { width:300px; }
   #datasetToggle, #varToggle { width:100%; display:flex; gap:8px; align-items:center; text-align:left; }
@@ -166,19 +171,16 @@
     </select>
   </div>
   <div class="grp"><label>Marginal panels</label>
-    <div style="display:flex;gap:8px;align-items:center">
-      <label class="hint" title="Show monthly mean and depth profile around the time × depth section"><input type="checkbox" id="secProfiles"> section</label>
-      <label class="hint" title="Show longitude and latitude profiles around the map"><input type="checkbox" id="mapProfiles"> map</label>
+    <div class="seg">
+      <button type="button" class="tog" id="secProfiles" title="Show monthly mean and depth profile around the time × depth section">section</button><button type="button" class="tog" id="mapProfiles" title="Show longitude and latitude profiles around the map">map</button>
     </div>
   </div>
   <div class="grp"><label>Extra panels</label>
-    <label class="hint" title="Add lat×depth and month×lat panels below the two main panels, averaged over the ranges currently selected on them"><input type="checkbox" id="extraPanels"> show below</label>
+    <div class="seg"><button type="button" class="tog" id="extraPanels" title="Add lat×depth and month×lat panels below the two main panels, averaged over the ranges currently selected on them">show below</button></div>
   </div>
   <div class="grp"><label id="rangeLabel">Colour range</label>
     <div style="display:flex;gap:6px;align-items:center">
-      <label class="hint"><input type="checkbox" id="autoRange" checked> auto</label>
-      <label class="hint" title="Use one value scale for every visible heatmap and marginal panel"><input type="checkbox" id="linkScales" checked> link panels</label>
-      <label class="hint" id="autoPrecLabel" style="display:none" title="Include the precision bound lines when auto-fitting the colour range. Precision intervals can be very wide, so turn this off to scale to the data and let the bounds run off-panel."><input type="checkbox" id="autoRangePrecision" checked> fit precision</label>
+      <div class="seg"><button type="button" class="tog on" id="autoRange" title="Fit the colour range to the data shown">auto</button><button type="button" class="tog on" id="linkScales" title="Use one value scale for every visible heatmap and marginal panel">link panels</button><button type="button" class="tog on" id="autoRangePrecision" style="display:none" title="Include the precision bound lines when auto-fitting the colour range. Precision intervals can be very wide, so turn this off to scale to the data and let the bounds run off-panel.">fit precision</button></div>
       <input type="number" id="vmin" class="range-in" step="any" disabled>
       <input type="number" id="vmax" class="range-in" step="any" disabled>
     </div>
@@ -195,7 +197,7 @@
   </div>
   <div class="grp var2Only" hidden><label>Colour range, variable 2</label>
     <div style="display:flex;gap:6px;align-items:center">
-      <label class="hint" title="Fit variable 2's section and map (linked when &quot;link panels&quot; is on)"><input type="checkbox" id="autoRange2" checked> auto</label>
+      <div class="seg"><button type="button" class="tog on" id="autoRange2" title="Fit variable 2's section and map (linked when &quot;link panels&quot; is on)">auto</button></div>
       <input type="number" id="vmin2" class="range-in" step="any" disabled>
       <input type="number" id="vmax2" class="range-in" step="any" disabled>
     </div>
@@ -393,7 +395,7 @@ var S = {
   dlAnchor: null, dlActive: null,   // depthLat panel: [depthRow, latCol]
   lmAnchor: null, lmActive: null,   // latMonth panel: [latRow, monthCol]
   focus: null,  // 'section' | 'map' — last-clicked plot; receives arrow keys
-  conditions: [], keep: null,
+  conditions: [], keep: null, keep2: null,
   secArr: null, mapArr: null, secWeight: null, mapWeight: null,
   secMonthArr: null, secDepthArr: null, mapLonArr: null, mapLatArr: null,
   depthLatArr: null, latMonthArr: null, depthLatWeight: null, latMonthWeight: null,
@@ -672,8 +674,14 @@ function loadModelFromBuffer(ab, name, source, gen) {
 }
 
 // ---------- compute ----------
+// Comparing datasets, each condition applies to dataset 1, 2 or both (c.target '1', '2'
+// or 'both'), evaluated on that dataset's own variables. Otherwise every condition
+// applies, and the second row (variable 2 of dataset 1) shares dataset 1's mask.
 function recomputeKeep() {
-  S.keep = GVCore.buildKeepMask(S.model, S.conditions);
+  if (!S.model) { S.keep = S.keep2 = null; return; }
+  var cmp = compareOn();
+  S.keep = GVCore.buildKeepMask(S.model, cmp ? S.conditions.filter(function (c) { return c.target !== '2'; }) : S.conditions);
+  S.keep2 = cmp ? GVCore.buildKeepMask(S.model2, S.conditions.filter(function (c) { return c.target !== '1'; })) : S.keep;
 }
 function recomputeAll() {
   if (!S.model || !S.varName) return;
@@ -687,9 +695,9 @@ function recomputeAll() {
   S.secArr2 = S.mapArr2 = null;
   var src2 = secondSource();
   if (src2) {
-    S.secArr2 = GVCore.sectionReduce(src2.model, src2.varName, S.keep, S.strict,
+    S.secArr2 = GVCore.sectionReduce(src2.model, src2.varName, S.keep2, S.strict,
       GVCore.selCells(S.boxLL.set, s.lon), S.weightMode, null);
-    S.mapArr2 = GVCore.mapReduce(src2.model, src2.varName, S.keep, S.strict,
+    S.mapArr2 = GVCore.mapReduce(src2.model, src2.varName, S.keep2, S.strict,
       GVCore.selCells(S.boxTD.set, s.month), S.weightMode, null);
   }
   recomputeProfiles();
@@ -783,7 +791,7 @@ function recomputeAll() {
 // panel showing them. Hide it otherwise.
 function updatePrecisionToggle() {
   var show = !!S.model && S.autoRange && hasPrecisionCompanion() && (S.secProfiles || S.mapProfiles);
-  document.getElementById('autoPrecLabel').style.display = show ? '' : 'none';
+  document.getElementById('autoRangePrecision').style.display = show ? '' : 'none';
 }
 function scaledWeights(base, nRows, nCols, rowFactor, colFactor, cellFactor) {
   var out = new Float64Array(nRows * nCols);
@@ -1091,7 +1099,8 @@ function conditionMetadata(){
     var v = S.model.vars[c.varName] || {};
     return { variable: c.varName, long_name: v.long_name || null, units: v.units || null,
       operator: c.op, value: c.value === '' || c.value == null ? null : +c.value,
-      value2: c.op === 'between' && c.value2 !== '' && c.value2 != null ? +c.value2 : null };
+      value2: c.op === 'between' && c.value2 !== '' && c.value2 != null ? +c.value2 : null,
+      applies_to: compareOn() ? { both: 'datasets 1 and 2', '1': 'dataset 1', '2': 'dataset 2' }[c.target || 'both'] : 'dataset 1' };
   });
 }
 function weightingMetadata(plot, selection){
@@ -2260,7 +2269,7 @@ function drawEmpty(msg) {
 
 // ---------- compare mode (dataset 2) ----------
 // Dataset 2 must be on dataset 1's grid (same depth/lat/lon/month cells), so both
-// use the same selections, cell weights and conditions mask (built on dataset 1).
+// use the same selections and cell weights; conditions can apply to either or both (recomputeKeep).
 function sameGrid(a, b) {
   if (!a || !b) return false;
   var dims = ['depth', 'lat', 'lon', 'month'];
@@ -2310,6 +2319,7 @@ function updateCompareLayout() {
   });
   if (on) document.getElementById('plots2').style.display = 'none';
   if (!on) S.cmpHL = null;
+  if (S.model) { recomputeKeep(); renderConds(); }   // per-dataset conditions only while comparing datasets
   if (S.model2 && !on) setStatus('Dataset 2 (' + shortName(S.model2.source) + ') is not on dataset 1\'s grid — not compared.', 'error');
 }
 // ---------- variable compare (variable 2 of dataset 1) ----------
@@ -2355,7 +2365,7 @@ function setSecondLimits() {
 // depth×lat×lon×month cell ('cells', no averaging), where both have a value (positive on
 // a log scale). A point is selected (sel=1) when its cell is inside the selection on the
 // left panels — the map box for map cells, the section box for section cells, both boxes
-// and the conditions mask for 4-D cells. Only selected points are coloured, set the axis
+// and both datasets' conditions masks for 4-D cells. Only selected points are coloured, set the axis
 // ranges and enter the fit; the rest are drawn grey for context.
 // Columns are typed arrays (a 4-D regression can have ~10^6 points); idx is the point's
 // flat index in its own grid (lat*nX+lon, depth*nM+month, or the 4-D data index).
@@ -2368,7 +2378,7 @@ function regressionPoints() {
   var src2 = secondSource();
   if (!pairOn() || !src2 || !S.secArr2) return null;
   var s = S.model.sizes, nX = s.lon, nY = s.lat, nM = s.month, kind = S.regMode;
-  var ll = maskFromSet(S.boxLL.set, nY * nX), td = maskFromSet(S.boxTD.set, s.depth * nM), keep = S.keep, lg = S.log;
+  var ll = maskFromSet(S.boxLL.set, nY * nX), td = maskFromSet(S.boxTD.set, s.depth * nM), keep = S.keep, keep2 = S.keep2, lg = S.log;
   var a1, a2, N;
   if (kind === 'cells') { a1 = S.model.vars[S.varName].data; a2 = src2.model.vars[src2.varName].data; }
   else if (kind === 'section') { a1 = S.secArr; a2 = S.secArr2; }
@@ -2382,7 +2392,7 @@ function regressionPoints() {
     if (kind === 'cells') {
       var mm = i % nM, t = (i - mm) / nM, xx = t % nX; t = (t - xx) / nX;
       var yy = t % nY, p = (t - yy) / nY;
-      sel = ll[yy * nX + xx] && td[p * nM + mm] && (!keep || keep[i]);
+      sel = ll[yy * nX + xx] && td[p * nM + mm] && (!keep || keep[i]) && (!keep2 || keep2[i]);
     } else sel = kind === 'map' ? ll[i] : td[i];
     X[n] = x; Y[n] = y; SEL[n] = sel ? 1 : 0; IDX[n] = i; n++;
   }
@@ -2851,10 +2861,25 @@ document.addEventListener('keydown', function (e) {
 function rebuildCondVarOptions() { renderConds(); }
 function renderConds() {
   var host = document.getElementById('condList'); host.innerHTML = '';
+  if (!S.model) return;
+  var cmp = compareOn(), names = S.model.varNames.slice();
+  if (cmp) S.model2.varNames.forEach(function (n) { if (names.indexOf(n) < 0) names.push(n); });
   S.conditions.forEach(function (c, i) {
     var row = document.createElement('div'); row.className = 'cond';
+    if (cmp) {   // which dataset(s) the condition masks, each tested on its own variables
+      var tseg = document.createElement('div'); tseg.className = 'seg';
+      tseg.title = 'Apply this condition to dataset 1, dataset 2 or both (each tested on its own ' + (c.varName || 'variable') + ')';
+      [['both', '1+2'], ['1', '1'], ['2', '2']].forEach(function (t) {
+        var b = document.createElement('button'); b.type = 'button'; b.textContent = t[1];
+        b.setAttribute('aria-label', t[0] === 'both' ? 'both datasets' : 'dataset ' + t[0]);
+        if ((c.target || 'both') === t[0]) b.className = 'on';
+        b.onclick = function () { c.target = t[0]; renderConds(); applyConds(); };
+        tseg.appendChild(b);
+      });
+      row.appendChild(tseg);
+    }
     var vsel = document.createElement('select');
-    S.model.varNames.forEach(function (n){ var o=document.createElement('option'); o.value=n; o.textContent=n; vsel.appendChild(o); });
+    names.forEach(function (n){ var o=document.createElement('option'); o.value=n; o.textContent=n; vsel.appendChild(o); });
     vsel.value = c.varName || S.model.varNames[0]; c.varName = vsel.value;
     vsel.onchange = function(){ c.varName = vsel.value; applyConds(); };
     var osel = document.createElement('select');
@@ -2875,6 +2900,19 @@ function renderConds() {
 function applyConds(){ recomputeKeep(); recomputeAll(); }
 
 // ---------- wiring ----------
+// On/off toggle buttons (.tog) stand in for checkboxes: each gets a `checked` property
+// (shown by the .on highlight) and fires its onchange when clicked.
+document.querySelectorAll('.tog').forEach(function (b) {
+  Object.defineProperty(b, 'checked', {
+    get: function () { return b.classList.contains('on'); },
+    set: function (v) { b.classList.toggle('on', !!v); b.setAttribute('aria-pressed', v ? 'true' : 'false'); }
+  });
+  b.checked = b.checked;
+  b.addEventListener('click', function () {
+    b.checked = !b.checked;
+    if (b.onchange) b.onchange({ target: b });
+  });
+});
 // Fetch a repo-hosted (published) dataset and load it — no user download step.
 function loadPublished(url){
   if (!url) {
@@ -3008,8 +3046,9 @@ document.getElementById('missSeg').onclick = function(e){ if(e.target.tagName!==
 document.getElementById('weightSel').onchange = function(e){ S.weightMode = e.target.value;
   // Annual product: the year-collapsed annual mean (and thus any condition mask
   // built on it) depends on the weighting, so re-materialise it before recompute.
-  if (S.model && S.model.hasYear) { GVCore.applyYearCollapse(S.model, S.weightMode); recomputeKeep(); }
+  if (S.model && S.model.hasYear) GVCore.applyYearCollapse(S.model, S.weightMode);
   if (S.model2 && S.model2.hasYear) GVCore.applyYearCollapse(S.model2, S.weightMode);
+  if ((S.model && S.model.hasYear) || (S.model2 && S.model2.hasYear)) recomputeKeep();
   recomputeAll(); };
 document.getElementById('secProfiles').onchange = function(e){ S.secProfiles = e.target.checked; recomputeAll(); };
 document.getElementById('mapProfiles').onchange = function(e){ S.mapProfiles = e.target.checked; recomputeAll(); };
@@ -3037,7 +3076,7 @@ function setAutoRange2(on) {
 document.getElementById('autoRange2').onchange = function(e){ setAutoRange2(e.target.checked); setSecondLimits(); draw(); };
 document.getElementById('vmin2').oninput = function(e){ S.vmin2 = +e.target.value; setSecondLimits(); draw(); };
 document.getElementById('vmax2').oninput = function(e){ S.vmax2 = +e.target.value; setSecondLimits(); draw(); };
-document.getElementById('addCond').onclick = function(){ if(!S.model)return; S.conditions.push({varName:S.model.varNames[0],op:'>=',value:0}); renderConds(); };
+document.getElementById('addCond').onclick = function(){ if(!S.model)return; S.conditions.push({varName:S.model.varNames[0],op:'>=',value:0,target:'both'}); renderConds(); };
 document.addEventListener('click', function(e){
   var b = e.target && e.target.closest ? e.target.closest('.dl') : null;
   if (b) downloadPanel(b.getAttribute('data-plot'), b.getAttribute('data-fmt'));
