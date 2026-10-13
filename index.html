@@ -45,6 +45,12 @@
   .datasetBadge { display:inline-flex; justify-content:center; min-width:30px; font-weight:700; color:var(--accent); }
   .datasetDetail { color:var(--muted); overflow-wrap:anywhere; }
   .datasetDetailEdit { border:0; font-size:11px; color:var(--muted); white-space:nowrap; }
+  .datasetMore { color:var(--muted); font-size:12px; border-top:1px solid var(--line); margin-top:4px; }
+  .extrasRow { padding:2px 8px 6px 38px; font-size:12px; }
+  .extrasName { display:flex; align-items:center; gap:6px; overflow-wrap:anywhere; }
+  .extrasTargets { display:flex; flex-wrap:wrap; gap:4px; margin-top:3px; }
+  .extrasTargets .tog { font-size:11px; padding:1px 6px; background:#fff; }
+  .extrasTargets .tog.on { background:var(--ink); border-color:var(--ink); color:#fff; }
   .range-in { width:74px; }
   #varDesc { white-space:pre-line; }
   #conds { padding:6px 14px; border-bottom:1px solid var(--line); background:var(--panel); }
@@ -117,6 +123,7 @@
         </optgroup>
       </select>
       <input type="file" id="fileIn" accept=".nc" style="display:none">
+      <input type="file" id="extrasIn" accept=".nc" style="display:none">
     </div>
     <div class="hint">Built-in files have 8 core variables — load your own NetCDF for the full set.</div>
     <div class="hint">Download latest full published dataset <a href="https://doi.org/10.5281/zenodo.19558504" target="_blank" rel="noopener">here</a>.</div>
@@ -346,6 +353,11 @@ function hasPrecisionCompanion() {
   return !!(unc.precision_lower || unc.precision_upper);
 }
 // Variable order for the pickers: core variables first, then the rest; each alphabetical.
+// Uncertainty bounds and counts (other than the core n_bbp) stay out of the variable picker
+// unless "Show all variables" is on: they are drawn with their variable, or are rarely mapped.
+function isMinorVar(n) {
+  return /_(precision|systematic_uncertainty)_(lower|upper)$/.test(n) || (/^n_/.test(n) && CORE_VARS.indexOf(n) < 0);
+}
 function varGroups(model) {
   var sorted = model.varNames.slice().sort(function (a, b) { return a.toLowerCase().localeCompare(b.toLowerCase()); });
   return { core: sorted.filter(function (n) { return CORE_VARS.indexOf(n) >= 0; }),
@@ -419,6 +431,7 @@ var S = {
   regColor: 'none', // colour the selected regression points by 'depth' | 'lat' | 'lon', or 'none'
   regFit: 'yx',      // 'yx' type I, x independent; 'xy' type I, y independent; 'york' type II
   regWeight: 'equal', // type II weights: 'equal' | 'n_bbp' | 'precision'
+  showAllVars: false,  // variable picker: also the uncertainty bounds and counts (isMinorVar)
   regSigCache: null,  // per-point n_bbp / precision grids for the type II fit (cleared by recomputeAll)
   cmpHL: null       // highlighted regression point {kind, r, c} (map/section) or {kind:'cells', p, y, x, m}
 };
@@ -501,7 +514,9 @@ var loadCtl = {
   reader: null,         // FileReader for in-flight local file
   lastOkDataset: null,  // datasetSel value that matches the model currently on screen
   localFiles: {},        // id ("__local__N") -> {name, buf: ArrayBuffer}, cached for the session
-  localSeq: 0
+  localSeq: 0,
+  extras: {},           // id ("__extras__N") -> {name, model, targets: {dataset id: true}}: "Add extras…"
+  extrasSeq: 0
 };
 
 function setStatus(t, kind) {
@@ -576,12 +591,25 @@ function loadFailed(msg, gen) {
 // Parse a NetCDF ArrayBuffer into S.model. Optional `gen` rejects stale results
 // from a superseded load; omit it for direct/synchronous callers (tests).
 // Returns true on success, false on failure or stale.
-function loadModelFromBuffer(ab, name, source, gen) {
+// `datasetId`: the dataset's picker id, for the extras added to it.
+function loadModelFromBuffer(ab, name, source, gen, datasetId) {
   if (isStaleLoad(gen)) return false;
   try {
     var model = GVCore.parseNetCDF(ab, name);
     if (isStaleLoad(gen)) return false;
     model.source = source || name;
+    var note = applyExtras(model, datasetId);
+  } catch (e) {
+    loadFailed('Failed to read ' + name + ': ' + e.message +
+      (S.model ? ' — previous dataset kept on screen.' : ''), gen);
+    return false;
+  }
+  return installModel(model, name, gen, note);
+}
+// Put a parsed model on screen as dataset 1, carrying the view over from the one before (also used
+// to refresh the current model in place after its extras change). `note` is added to the status.
+function installModel(model, name, gen, note) {
+  try {
     // Capture the view (variable + selections) before it's overwritten, so a
     // dataset switch (e.g. smoothed <-> raw climatology) can carry it over
     // instead of resetting to the whole-globe / annual-mean default.
@@ -669,7 +697,7 @@ function loadModelFromBuffer(ab, name, source, gen) {
     setStatus('Loaded ' + name + ' — ' + model.varNames.length + ' variables, grid ' +
       model.sizes.depth + '×' + model.sizes.lat + '×' + model.sizes.lon + '×' + model.sizes.month +
       (model.hasYear ? '×' + model.sizes.year + ' (depth×lat×lon×month×year).'
-                     : ' (depth×lat×lon×month).'), 'ok');
+                     : ' (depth×lat×lon×month).') + (note ? ' Extras: ' + note + '.' : ''), 'ok');
     return true;
   } catch (e) {
     loadFailed('Failed to read ' + name + ': ' + e.message +
@@ -3059,7 +3087,7 @@ function loadPublished(url){
       // Let the loading overlay paint before the parse blocks the main thread.
       afterPaint(function () {
         if (isStaleLoad(gen)) return;
-        if (loadModelFromBuffer(ab, name, url, gen)) { loadCtl.lastOkDataset = url; renderDatasetPicker(); }
+        if (loadModelFromBuffer(ab, name, url, gen, url)) { loadCtl.lastOkDataset = url; renderDatasetPicker(); }
       });
     })
     .catch(function (e) {
@@ -3111,7 +3139,7 @@ function finishLocalLoad(buf, name, gen, id, path, file) {
   // Let the loading overlay paint before the parse blocks the main thread.
   afterPaint(function () {
     if (isStaleLoad(gen)) return;
-    if (loadModelFromBuffer(buf, name, name, gen)) {
+    if (loadModelFromBuffer(buf, name, name, gen, id)) {
       var finalId = id || registerLocalFile(name, buf, path, S.model.globalAttrs, file);
       loadCtl.lastOkDataset = finalId;
       document.getElementById('datasetSel').value = finalId;
@@ -3256,6 +3284,8 @@ function closeDatasetMenu() {
 function chooseDataset(id, second) {
   if (id === '__pick__') {
     document.getElementById(second ? 'cmpFileIn' : 'fileIn').click();
+  } else if (id === '__extras__') {
+    document.getElementById('extrasIn').click();
   } else if (second) {
     loadCompare(cmpCtl.last === id ? '' : id);
   } else {
@@ -3307,6 +3337,33 @@ function renderDatasetPicker() {
   if (entries.some(function(e) { return e.local; })) group('Your files');
   entries.filter(function(e) { return e.local; }).forEach(row);
   row({ id:'__pick__', name:'Choose file from your computer…' });
+  row({ id:'__extras__', name:'Add extras…' });
+  var xids = Object.keys(loadCtl.extras);
+  if (xids.length) group('Extras — add their variables to:');
+  xids.forEach(function(xid) {
+    var x = loadCtl.extras[xid];
+    var wrap = document.createElement('div'); wrap.className = 'extrasRow';
+    var head = document.createElement('div'); head.className = 'extrasName';
+    var nm = document.createElement('span'); nm.textContent = x.name + ' (' + x.model.varNames.length + ' variables)'; head.appendChild(nm);
+    var rm = document.createElement('button'); rm.type = 'button'; rm.className = 'datasetDetailEdit'; rm.textContent = 'Remove';
+    rm.setAttribute('aria-label', 'Remove the extras ' + x.name);
+    rm.onclick = function() { removeExtrasFile(xid); };
+    head.appendChild(rm); wrap.appendChild(head);
+    var chips = document.createElement('div'); chips.className = 'extrasTargets';
+    function chip(label, on, aria, fn) {
+      var b = document.createElement('button'); b.type = 'button'; b.className = 'tog' + (on ? ' on' : '');
+      b.textContent = label; b.setAttribute('aria-pressed', on ? 'true' : 'false'); b.setAttribute('aria-label', aria);
+      b.onclick = fn; chips.appendChild(b);
+    }
+    var all = entries.every(function(e) { return x.targets[e.id]; });
+    chip('all', all, 'Add ' + x.name + ' to every dataset', function() {
+      entries.forEach(function(e) { setExtrasTarget(xid, e.id, !all); });
+    });
+    entries.forEach(function(e) {
+      chip(e.name, !!x.targets[e.id], 'Add ' + x.name + ' to ' + e.name, function() { setExtrasTarget(xid, e.id, !x.targets[e.id]); });
+    });
+    wrap.appendChild(chips); host.appendChild(wrap);
+  });
   if (cmpCtl.last) {
     var clear = document.createElement('button'); clear.type = 'button'; clear.className = 'datasetOption';
     clear.textContent = 'Remove dataset 2'; clear.onclick = function() { loadCompare(''); closeDatasetMenu(); document.getElementById('datasetToggle').focus(); };
@@ -3336,6 +3393,76 @@ document.addEventListener('focusin', function(e) {
   if (!document.getElementById('datasetPicker').contains(e.target)) closeDatasetMenu();
 });
 
+// ---------- extras: variables of other files on the same grid, added to chosen datasets ----------
+// Merge every extras file targeted at `datasetId` into a freshly parsed `model`; returns a status note.
+function applyExtras(model, datasetId) {
+  var notes = [];
+  Object.keys(loadCtl.extras).forEach(function (xid) {
+    var x = loadCtl.extras[xid];
+    if (datasetId && x.targets[datasetId]) notes.push(mergeNote(model, xid));
+  });
+  return notes.join('; ');
+}
+function mergeNote(model, xid) {
+  var x = loadCtl.extras[xid];
+  try {
+    var r = GVCore.mergeExtras(model, x.model, xid, S.weightMode);
+    return r.added.length + ' variables from ' + x.name +
+      (r.skipped.length ? ' (' + r.skipped.length + ' skipped: already in the dataset, or per-year)' : '');
+  } catch (e) {
+    return x.name + ' not added: ' + e.message;
+  }
+}
+// Add (on) or take away the extras `xid` for dataset `dsid`; a dataset on screen is updated in place.
+function setExtrasTarget(xid, dsid, on) {
+  var x = loadCtl.extras[xid];
+  if (!x || !!x.targets[dsid] === !!on) return;
+  if (on) x.targets[dsid] = true; else delete x.targets[dsid];
+  if (S.model && loadCtl.lastOkDataset === dsid) {
+    GVCore.removeExtras(S.model, xid);
+    var note = on ? mergeNote(S.model, xid) : 'removed ' + x.name;
+    installModel(S.model, S.model.filename, null, note);
+  }
+  if (S.model2 && cmpCtl.last === dsid) {
+    GVCore.removeExtras(S.model2, xid);
+    if (on) setStatus('Dataset 2 extras: ' + mergeNote(S.model2, xid) + '.', 'ok');
+    if (S.model2.hasYear) GVCore.applyYearCollapse(S.model2, S.weightMode);
+    updateVarDesc(); renderVarPicker(); recomputeKeep(); updateCompareLayout(); recomputeAll();
+  }
+  renderDatasetPicker();
+}
+function removeExtrasFile(xid) {
+  Object.keys(loadCtl.extras[xid].targets).forEach(function (dsid) { setExtrasTarget(xid, dsid, false); });
+  delete loadCtl.extras[xid];
+  renderDatasetPicker();
+}
+document.getElementById('extrasIn').onchange = function (e) {
+  var f = e.target.files[0]; if (!f) return;
+  var rd = new FileReader();
+  showOverlay('Reading extras: ' + f.name + '…', 'loading');
+  rd.onload = function () {
+    afterPaint(function () {
+      try {
+        var m = GVCore.parseNetCDF(rd.result, f.name);
+        if (!m.varNames.length) throw new Error('no 4-D variables');
+        var xid = '__extras__' + (++loadCtl.extrasSeq), why = '';
+        loadCtl.extras[xid] = { name: f.name, model: m, targets: {} };
+        hideOverlay();
+        // added to dataset 1 straight away if on its grid; the Datasets menu adds it to others
+        try { if (S.model) GVCore.checkSameGrid(S.model, m); } catch (g) { why = ' (not on dataset 1\'s grid: ' + g.message + ')'; }
+        if (S.model && loadCtl.lastOkDataset && !why) setExtrasTarget(xid, loadCtl.lastOkDataset, true);
+        else { renderDatasetPicker(); setStatus('Extras ' + f.name + ' read' + why + ': choose datasets for it in the Datasets menu.', 'ok'); }
+      } catch (err) {
+        hideOverlay();
+        setStatus('Could not use extras ' + f.name + ': ' + err.message, 'error');
+      }
+    });
+  };
+  rd.onerror = function () { hideOverlay(); setStatus('Could not read extras ' + f.name, 'error'); };
+  rd.readAsArrayBuffer(f);
+  e.target.value = '';
+};
+
 // ---------- compare mode: loading dataset 2 ----------
 var cmpCtl = { last: '', gen: 0 };
 function setModel2FromBuffer(ab, name, source, value, gen) {
@@ -3343,6 +3470,7 @@ function setModel2FromBuffer(ab, name, source, value, gen) {
   try {
     var m2 = GVCore.parseNetCDF(ab, name);
     m2.source = source || name;
+    var note = applyExtras(m2, value);
     if (m2.hasYear) GVCore.applyYearCollapse(m2, S.weightMode);
     if (S.model && !sameGrid(S.model, m2)) throw new Error('not on dataset 1\'s grid (' + m2.sizes.depth + '×' + m2.sizes.lat + '×' + m2.sizes.lon + '×' + m2.sizes.month + ')');
     var hadVar2 = varPairOn();
@@ -3354,7 +3482,8 @@ function setModel2FromBuffer(ab, name, source, value, gen) {
     renderDatasetPicker();
     hideOverlay();
     setStatus('Comparing with ' + name + (m2.vars[S.varName] ? '.' : ' — it has no ' + S.varName + '.') +
-      (hadVar2 ? ' Variable 2 removed (compare either two datasets or two variables).' : ''), 'ok');
+      (hadVar2 ? ' Variable 2 removed (compare either two datasets or two variables).' : '') +
+      (note ? ' Extras: ' + note + '.' : ''), 'ok');
   } catch (e) {
     hideOverlay();
     setStatus('Dataset 2: could not use ' + name + ': ' + e.message, 'error');
@@ -3460,8 +3589,18 @@ function renderVarPicker() {
     var h = document.createElement('div'); h.className = 'datasetGroup'; h.textContent = label; host.appendChild(h);
   }
   var g = varGroups(S.model);
-  if (g.core.length && g.rest.length) { group('Core variables'); g.core.forEach(row); group('Other variables'); g.rest.forEach(row); }
-  else g.core.concat(g.rest).forEach(row);
+  // minor variables (uncertainty bounds, counts) only on request, or while chosen
+  var nMinor = S.model.varNames.filter(isMinorVar).length;
+  var shown = function (n) { return S.showAllVars || !isMinorVar(n) || n === S.varName || (varPairOn() && n === S.varName2); };
+  var core = g.core.filter(shown), rest = g.rest.filter(shown);
+  if (core.length && rest.length) { group('Core variables'); core.forEach(row); group('Other variables'); rest.forEach(row); }
+  else core.concat(rest).forEach(row);
+  if (nMinor) {
+    var more = document.createElement('button'); more.type = 'button'; more.className = 'datasetOption datasetMore';
+    more.textContent = S.showAllVars ? 'Hide uncertainty bounds and counts' : 'Show all variables (+' + nMinor + ' uncertainty bounds and counts)';
+    more.onclick = function () { S.showAllVars = !S.showAllVars; renderVarPicker(); var b = document.querySelector('#varOptions .datasetMore'); if (b) b.focus(); };
+    host.appendChild(more);
+  }
   if (varPairOn()) {
     var clear = document.createElement('button'); clear.type = 'button'; clear.className = 'datasetOption';
     clear.textContent = 'Remove variable 2';

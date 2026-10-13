@@ -293,6 +293,51 @@
     return model;
   }
 
+  // ---- extras: variables of another file on the same grid, added to a dataset ----
+  // Throws if `extra` is not on `model`'s depth/lat/lon/month grid (sizes, and coordinate values to
+  // 1e-3 relative: a file written as float64 matches one written as float32).
+  function checkSameGrid(model, extra) {
+    CANON.forEach(function (d) {
+      if (model.sizes[d] !== extra.sizes[d]) {
+        throw new Error('its ' + d + ' has ' + extra.sizes[d] + ' values, the dataset\'s ' + model.sizes[d]);
+      }
+      var a = model.coords[d], b = extra.coords[d];
+      for (var i = 0; i < a.length; i++) {
+        if (Math.abs(a[i] - b[i]) > 1e-3 * (1 + Math.abs(a[i]))) throw new Error('its ' + d + ' values differ from the dataset\'s');
+      }
+    });
+  }
+  // Add the variables of `extra` (a parsed file on the same grid) to `model`, each tagged with
+  // `source` (`rec.extraSource`). A name the dataset already has keeps the dataset's variable; a
+  // per-year (5-D) variable joins only an annual dataset with the same years. Returns
+  // {added: [...], skipped: [...]}. Arrays are shared with `extra`, not copied. `weightMode`: the
+  // year collapse of an annual dataset's added 5-D variables (default 'physical').
+  function mergeExtras(model, extra, source, weightMode) {
+    checkSameGrid(model, extra);
+    var added = [], skipped = [];
+    extra.varNames.forEach(function (n) {
+      var v = extra.vars[n];
+      var yearsMatch = model.hasYear && extra.hasYear && model.sizes.year === extra.sizes.year;
+      if (model.vars[n] || (v.data5d && !yearsMatch)) { skipped.push(n); return; }
+      var rec = {};
+      Object.keys(v).forEach(function (k) { rec[k] = v[k]; });
+      rec.extraSource = source;
+      if (rec.data5d) rec.data = null;   // re-collapsed with the dataset's weighting
+      model.vars[n] = rec;
+      model.varNames.push(n);
+      added.push(n);
+    });
+    if (model.hasYear && added.length) applyYearCollapse(model, weightMode || 'physical');
+    return { added: added, skipped: skipped };
+  }
+  // Remove the variables `mergeExtras` added from `source`; returns their names.
+  function removeExtras(model, source) {
+    var gone = model.varNames.filter(function (n) { return model.vars[n].extraSource === source; });
+    gone.forEach(function (n) { delete model.vars[n]; });
+    model.varNames = model.varNames.filter(function (n) { return model.vars[n]; });
+    return gone;
+  }
+
   // Collapse the year axis of a 5-D annual model down to the 4-D
   // [depth,lat,lon,month] `.data` the main dashboard consumes, honouring the
   // weighting choice. This lets the whole existing 4-D engine run unchanged on
@@ -980,6 +1025,9 @@
 
   var api = {
     parseNetCDF: parseNetCDF,
+    checkSameGrid: checkSameGrid,
+    mergeExtras: mergeExtras,
+    removeExtras: removeExtras,
     buildKeepMask: buildKeepMask,
     sectionReduce: sectionReduce,
     mapReduce: mapReduce,

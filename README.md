@@ -39,7 +39,20 @@ selection stays on each panel as a thin magenta rectangle.
   depth/month selections are kept, re-derived via their physical value ranges
   so they still land in the right place even if the new file has a different
   resolution.
-- **Pick the variable** to visualise from a dropdown.
+- **Add extras:** "Add extras…" in the Datasets menu reads another NetCDF file
+  on the same depth × lat × lon × month grid (e.g. a climatology kept apart from
+  the main product, such as GLOBESINK's Kd climatology) and adds its variables
+  to datasets of your choice. It is added to dataset 1 straight away; under
+  "Extras" in the menu, toggle it on or off for each dataset (built-in or your
+  own files), or "all". Its variables then appear in the variable list of those
+  datasets, as dataset 1 or 2, with any `_precision_*` companions, and can be
+  compared or regressed against the dataset's own variables. A name the dataset
+  already has keeps the dataset's variable; per-year (5-D) extras join only an
+  annual dataset with the same years. Extras last for the session.
+- **Pick the variable** to visualise from a dropdown. Uncertainty bounds (`_precision_*`,
+  `_systematic_uncertainty_*`) and counts (`n_*`, except the core `n_bbp`) are
+  left out of the list, as they are drawn with their variable; "Show all
+  variables" at the bottom of the list adds them.
 - **Linked box-averaging** across the two panels (see above).
 - **Optional marginal panels:** shrink either main heatmap to three-quarters of
   its original width and height and use the freed space for quantitative line

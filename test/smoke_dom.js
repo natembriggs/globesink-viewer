@@ -94,7 +94,7 @@ try {
   var m = html.match(/<script>([\s\S]*?)<\/script>\s*<\/body>/);
   if (!m) throw new Error('could not extract inline script');
   // strict-mode eval keeps declarations local, so expose what we need to assert on
-  eval(m[1] + '\n;globalThis.__gv = { S: S, recomputeAll: recomputeAll, recomputeKeep: recomputeKeep, loadModelFromBuffer: loadModelFromBuffer, loadPublished: loadPublished, panelRects: panelRects, landLoaded: function(){ return LAND != null; }, land: function(){ return LAND; }, csvSectionGrid: csvSectionGrid, csvMapLong: csvMapLong, jsonExport: jsonExport, draw: draw, buildRotatedAxis: buildRotatedAxis, axisPixelToDataCol: axisPixelToDataCol, wrapMod: wrapMod, secGeom: function(){ return secGeom; }, latMonthGeom: function(){ return latMonthGeom; }, depthLatGeom: function(){ return depthLatGeom; }, depthLatBox: depthLatBox, commitDepthLatBox: commitDepthLatBox, latMonthBox: latMonthBox, commitLatMonthBox: commitLatMonthBox, productSet: productSet, bboxRange: bboxRange, syncAnchors: syncAnchors, precisionToggleShown: function(){ return document.getElementById(\'autoRangePrecision\').style.display !== \'none\'; }, loadCtl: loadCtl, setModel2FromBuffer: setModel2FromBuffer, cmpCtl: cmpCtl, compareOn: compareOn, regressionPoints: regressionPoints, regGeom: function(){ return regGeom; }, regressionClick: regressionClick, secGeom2: function(){ return secGeom2; }, mapGeom2: function(){ return mapGeom2; }, loadCompare: loadCompare, chooseDataset: chooseDataset, datasetSlot: datasetSlot, datasetEntries: datasetEntries, renderDatasetPicker: renderDatasetPicker, localDatasetMetadata: localDatasetMetadata, localDatasetLabel: localDatasetLabel, varPairOn: varPairOn, pairOn: pairOn, chooseVariable: chooseVariable, setVariable2: setVariable2, varSlot: varSlot, highlightCell: highlightCell, regColorAvailable: regColorAvailable, yorkFit: yorkFit, olsFit: olsFit, olsFitXonY: olsFitXonY, regWeightAvailable: regWeightAvailable };');
+  eval(m[1] + '\n;globalThis.__gv = { S: S, recomputeAll: recomputeAll, recomputeKeep: recomputeKeep, loadModelFromBuffer: loadModelFromBuffer, loadPublished: loadPublished, panelRects: panelRects, landLoaded: function(){ return LAND != null; }, land: function(){ return LAND; }, csvSectionGrid: csvSectionGrid, csvMapLong: csvMapLong, jsonExport: jsonExport, draw: draw, buildRotatedAxis: buildRotatedAxis, axisPixelToDataCol: axisPixelToDataCol, wrapMod: wrapMod, secGeom: function(){ return secGeom; }, latMonthGeom: function(){ return latMonthGeom; }, depthLatGeom: function(){ return depthLatGeom; }, depthLatBox: depthLatBox, commitDepthLatBox: commitDepthLatBox, latMonthBox: latMonthBox, commitLatMonthBox: commitLatMonthBox, productSet: productSet, bboxRange: bboxRange, syncAnchors: syncAnchors, precisionToggleShown: function(){ return document.getElementById(\'autoRangePrecision\').style.display !== \'none\'; }, loadCtl: loadCtl, setModel2FromBuffer: setModel2FromBuffer, cmpCtl: cmpCtl, compareOn: compareOn, regressionPoints: regressionPoints, regGeom: function(){ return regGeom; }, regressionClick: regressionClick, secGeom2: function(){ return secGeom2; }, mapGeom2: function(){ return mapGeom2; }, loadCompare: loadCompare, chooseDataset: chooseDataset, datasetSlot: datasetSlot, datasetEntries: datasetEntries, renderDatasetPicker: renderDatasetPicker, localDatasetMetadata: localDatasetMetadata, localDatasetLabel: localDatasetLabel, varPairOn: varPairOn, pairOn: pairOn, chooseVariable: chooseVariable, setVariable2: setVariable2, varSlot: varSlot, highlightCell: highlightCell, regColorAvailable: regColorAvailable, yorkFit: yorkFit, olsFit: olsFit, olsFitXonY: olsFitXonY, regWeightAvailable: regWeightAvailable, setExtrasTarget: setExtrasTarget, removeExtrasFile: removeExtrasFile, isMinorVar: isMinorVar, renderVarPicker: renderVarPicker };');
   var G = globalThis.__gv, S = G.S;
   var recomputeAll = G.recomputeAll, recomputeKeep = G.recomputeKeep;
   // the app now starts blank; drive the file-load path directly
@@ -633,6 +633,41 @@ try {
   chk('json source metadata', js.metadata.variable.long_name && js.metadata.dataset.global_attributes.title);
 
   // ---- annual (5-D) product: year collapse + the two year panels ----
+  chk('uncertainty bounds and counts are minor variables', G.isMinorVar('Kd490_precision_upper') && G.isMinorVar('n_Kd490') && G.isMinorVar('bbm_systematic_uncertainty_lower') && !G.isMinorVar('n_bbp') && !G.isMinorVar('Kd490'));
+  S.showAllVars = false; G.renderVarPicker(); S.showAllVars = true; G.renderVarPicker(); S.showAllVars = false; G.renderVarPicker();
+  chk('variable picker renders with and without the minor variables', true);
+  // ---- extras: another file's variables added to chosen datasets ----
+  (function () {
+    var buf = function () { return fb0.buffer.slice(fb0.byteOffset, fb0.byteOffset + fb0.byteLength); };
+    G.loadModelFromBuffer(buf(), 'globesink_example.nc', 'globesink_example.nc', null, 'core.nc');
+    G.loadCtl.lastOkDataset = 'core.nc';
+    var x = GVCore.parseNetCDF(buf(), 'kd.nc'), xv = {};
+    x.varNames = x.varNames.map(function (n) { xv['X_' + n] = x.vars[n]; return 'X_' + n; });
+    var dup = x.varNames[0].slice(2), withPrec = x.varNames.filter(function (n) { return xv[n + '_precision_upper']; })[0] || x.varNames[0];
+    x.varNames.push(dup); xv[dup] = x.vars[dup];   // a name the dataset has: skipped
+    x.vars = xv;
+    G.loadCtl.extras.__extras__1 = { name: 'kd.nc', model: x, targets: {} };
+    var n0 = S.model.varNames.length;
+    G.setExtrasTarget('__extras__1', 'core.nc', true);
+    chk('extras added to the dataset on screen', S.model.varNames.length === n0 + x.varNames.length - 1 && S.model.vars[withPrec].extraSource === '__extras__1');
+    chk('extras keep the dataset\'s own variable of the same name', S.model.vars[dup].extraSource === undefined);
+    S.varName = withPrec; document.getElementById('varSel').value = withPrec; recomputeAll(); G.draw();
+    chk('an extras variable draws', Array.prototype.some.call(S.mapArr, isFinite));
+    chk('its precision companions are found', withPrec === x.varNames[0] || !!S.model.vars[withPrec + '_precision_upper']);
+    G.loadModelFromBuffer(buf(), 'globesink_example.nc', 'globesink_example.nc', null, 'core.nc');
+    chk('extras merged again when the dataset is reloaded', !!S.model.vars[withPrec] && S.varName === withPrec);
+    G.loadModelFromBuffer(buf(), 'other.nc', 'other.nc', null, 'other.nc');
+    chk('not merged into a dataset it was not added to', !S.model.vars[withPrec]);
+    G.loadModelFromBuffer(buf(), 'globesink_example.nc', 'globesink_example.nc', null, 'core.nc');
+    G.setExtrasTarget('__extras__1', 'core.nc', false);
+    chk('taken away from the dataset on screen', S.model.varNames.length === n0 && !S.model.vars[withPrec] && S.varName !== withPrec);
+    var bad = GVCore.parseNetCDF(buf(), 'bad.nc'); bad.sizes = { depth: 1, lat: 1, lon: 1, month: 1 };
+    var threw = false; try { GVCore.mergeExtras(S.model, bad, 'b'); } catch (e) { threw = true; }
+    chk('extras on another grid are refused', threw);
+    G.removeExtrasFile('__extras__1');
+    chk('extras file removed', !G.loadCtl.extras.__extras__1);
+    G.renderDatasetPicker();
+  })();
   S.conditions = [];   // clear the stale n_profiles>=40 condition from the 4-D checks above
   // ---- compare mode: dataset 2 on the same grid ----
   (function () {
