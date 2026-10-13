@@ -16,6 +16,7 @@
   body { margin:0; font:13px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; color:var(--ink); background:var(--bg); }
   header { padding:8px 14px; border-bottom:1px solid var(--line); display:flex; flex-wrap:wrap; gap:10px 18px; align-items:flex-start; }
   .grp { display:flex; flex-direction:column; gap:3px; }
+  .grp[hidden] { display:none; }
   .grp label { font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:.04em; }
   select, input[type=number], button, input[type=file] { font:inherit; padding:4px 6px; border:1px solid var(--line); border-radius:5px; background:#fff; color:var(--ink); }
   button { cursor:pointer; }
@@ -142,7 +143,7 @@
     <select id="varSel" hidden aria-hidden="true"></select>
     <div class="hint" id="varDesc"></div>
   </div>
-  <div class="grp"><label>Colormap</label>
+  <div class="grp"><label id="cmapLabel">Colormap</label>
     <select id="cmapSel">
       <option value="reds">Reds</option>
       <option value="blues">Blues</option>
@@ -173,13 +174,30 @@
   <div class="grp"><label>Extra panels</label>
     <label class="hint" title="Add lat×depth and month×lat panels below the two main panels, averaged over the ranges currently selected on them"><input type="checkbox" id="extraPanels"> show below</label>
   </div>
-  <div class="grp"><label>Colour range</label>
+  <div class="grp"><label id="rangeLabel">Colour range</label>
     <div style="display:flex;gap:6px;align-items:center">
       <label class="hint"><input type="checkbox" id="autoRange" checked> auto</label>
       <label class="hint" title="Use one value scale for every visible heatmap and marginal panel"><input type="checkbox" id="linkScales" checked> link panels</label>
       <label class="hint" id="autoPrecLabel" style="display:none" title="Include the precision bound lines when auto-fitting the colour range. Precision intervals can be very wide, so turn this off to scale to the data and let the bounds run off-panel."><input type="checkbox" id="autoRangePrecision" checked> fit precision</label>
       <input type="number" id="vmin" class="range-in" step="any" disabled>
       <input type="number" id="vmax" class="range-in" step="any" disabled>
+    </div>
+  </div>
+  <div class="grp var2Only" hidden><label for="cmapSel2">Colormap, variable 2</label>
+    <select id="cmapSel2">
+      <option value="reds">Reds</option>
+      <option value="blues">Blues</option>
+      <option value="greens">Greens</option>
+      <option value="viridis">Viridis</option>
+      <option value="thermal">Thermal</option>
+      <option value="gray">Gray</option>
+    </select>
+  </div>
+  <div class="grp var2Only" hidden><label>Colour range, variable 2</label>
+    <div style="display:flex;gap:6px;align-items:center">
+      <label class="hint" title="Fit variable 2's section and map (linked when &quot;link panels&quot; is on)"><input type="checkbox" id="autoRange2" checked> auto</label>
+      <input type="number" id="vmin2" class="range-in" step="any" disabled>
+      <input type="number" id="vmax2" class="range-in" step="any" disabled>
     </div>
   </div>
 </header>
@@ -392,6 +410,7 @@ var S = {
   // Variable-compare mode: a second variable of dataset 1 (see varPairOn), shown in the same
   // layout as compare mode but with its own colormap and colour range. The two modes are exclusive.
   varName2: null, cmap2: 'reds', secLim2: [0, 1], mapLim2: [0, 1],
+  autoRange2: true, vmin2: 0, vmax2: 1,
   regMode: 'map',   // regression points: 'map' (lat×lon cells), 'section' (depth×month cells) or 'cells' (every 4-D cell)
   regColor: 'none', // colour the selected regression points by 'depth' | 'lat' | 'lon', or 'none'
   cmpHL: null       // highlighted regression point {kind, r, c} (map/section) or {kind:'cells', p, y, x, m}
@@ -1023,7 +1042,8 @@ function updateTitles() {
     document.getElementById('secTitle2').textContent = document.getElementById('secTitle').textContent;
     document.getElementById('mapTitle2').textContent = document.getElementById('mapTitle').textContent;
     var vm = varPairOn();
-    var n1 = '1: ' + (vm ? S.varName : shortName(S.model.source)) + ' — ', n2 = '2: ' + (vm ? S.varName2 : shortName(S.model2.source)) + ' — ';
+    var n1 = '1: ' + (vm ? S.varName : editedDatasetLabel(1) || shortName(S.model.source)) + ' — ',
+        n2 = '2: ' + (vm ? S.varName2 : editedDatasetLabel(2) || shortName(S.model2.source)) + ' — ';
     document.getElementById('secDs1').textContent = n1; document.getElementById('mapDs1').textContent = n1;
     document.getElementById('secDs2').textContent = n2; document.getElementById('mapDs2').textContent = n2;
   }
@@ -2253,6 +2273,11 @@ function sameGrid(a, b) {
   return true;
 }
 function compareOn() { return !!(S.model && S.model2 && sameGrid(S.model, S.model2)); }
+// The label the user typed for dataset 1 or 2 (local files only), or null if none was set.
+function editedDatasetLabel(slot) {
+  var f = loadCtl.localFiles[slot === 2 ? cmpCtl.last : loadCtl.lastOkDataset];
+  return f && f.label ? f.label : null;
+}
 function shortName(src) { return String(src || '').split('/').pop().replace(/\.nc$/, ''); }
 function drawMissingVar(ctx, R) {
   ctx.save(); ctx.fillStyle = '#f2f3f5'; ctx.fillRect(R.x, R.y, R.w, R.h);
@@ -2270,8 +2295,13 @@ function drawHighlightCell(ctx, r, c, colAxis, rowPix) {
 }
 // Switch the page between the normal and the compare layout (dataset 2 loaded on dataset 1's grid).
 function updateCompareLayout() {
-  var on = pairOn();
+  var on = pairOn(), vm = varPairOn();
   document.getElementById('plots').classList.toggle('compare', on);
+  // variable 2 has its own colormap and colour range controls, shown only in variable compare
+  document.querySelectorAll('.var2Only').forEach(function (el) { el.hidden = !vm; });
+  document.getElementById('cmapLabel').textContent = vm ? 'Colormap, variable 1' : 'Colormap';
+  document.getElementById('rangeLabel').textContent = vm ? 'Colour range, variable 1' : 'Colour range';
+  if (vm) document.getElementById('cmapSel2').value = S.cmap2;
   // marginal and extra panels are dataset-1 only; they are switched off while comparing
   ['secProfiles', 'mapProfiles', 'extraPanels'].forEach(function (id) {
     var el = document.getElementById(id);
@@ -2300,11 +2330,12 @@ function withSecondCmap(fn) {
   try { fn(); } finally { S.cmap = keep; }
 }
 // Second-row colour ranges. Dataset 2 shares dataset 1's scales; variable 2 (other units)
-// gets its own, auto-fitted whatever the range mode, linked across its section and map
+// gets its own: set by hand, or auto-fitted and linked across its section and map
 // when "link panels" is on (shallow water above the selected depths left out, as for 1).
 function setSecondLimits() {
   if (!S.secArr2) return;
   if (!varPairOn()) { S.secLim2 = S.secLim; S.mapLim2 = S.mapLim; return; }
+  if (!S.autoRange2) { S.secLim2 = [S.vmin2, S.vmax2]; S.mapLim2 = [S.vmin2, S.vmax2]; return; }
   var s = S.model.sizes, rows = GVCore.selRowsCols(S.boxTD.set, s.month).rows;
   if (S.linkScales) {
     var sec = maskShallowSection(S.secArr2, s.depth, s.month, rows.length ? rows[0] : 0);
@@ -2313,6 +2344,10 @@ function setSecondLimits() {
     S.secLim2 = safeLimits(GVCore.robustLimits(S.secArr2, 0.02, 0.98, S.log), S.log);
     S.mapLim2 = safeLimits(GVCore.robustLimits(S.mapArr2, 0.02, 0.98, S.log), S.log);
   }
+  // the min/max boxes echo the map's range, as for variable 1
+  S.vmin2 = S.mapLim2[0]; S.vmax2 = S.mapLim2[1];
+  document.getElementById('vmin2').value = fmtNum(S.vmin2);
+  document.getElementById('vmax2').value = fmtNum(S.vmax2);
 }
 
 // ---------- 1 vs 2 regression ----------
@@ -2459,7 +2494,8 @@ function drawRegression(cssH) {
   var colBy = P && regColorAvailable(P.kind, S.regColor) ? S.regColor : 'none';
   var R = { x: 62, y: 12, w: cssW - 62 - 14, h: cssH - 12 - 48 - (colBy !== 'none' ? REG_KEY_H : 0) };
   R.h = Math.min(R.h, Math.max(120, R.w * 1.1));   // keep it near square when the column is narrow
-  var pairName = vm ? S.varName + ' vs ' + S.varName2 : 'dataset 1 vs 2';
+  var d1 = editedDatasetLabel(1), d2 = editedDatasetLabel(2);
+  var pairName = vm ? S.varName + ' vs ' + S.varName2 : (d1 || d2) ? (d1 || 'dataset 1') + ' vs ' + (d2 || 'dataset 2') : 'dataset 1 vs 2';
   regGeom = null;
   // grey out colourings this point kind lacks; the highlighted button shows the colouring
   // actually drawn (S.regColor is kept, so it returns when switching back)
@@ -2507,8 +2543,8 @@ function drawRegression(cssH) {
   ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
   yt.forEach(function (v) { ctx.fillText(lab(v), R.x - 5, py(v)); });
   var unitOf = function (n) { var u = S.model.vars[n].units; return u ? ' (' + u + ')' : ''; };
-  var xLabel = vm ? S.varName + unitOf(S.varName) : S.varName + ', dataset 1' + unitOf(S.varName);
-  var yLabel = vm ? S.varName2 + unitOf(S.varName2) : S.varName + ', dataset 2' + unitOf(S.varName);
+  var xLabel = vm ? S.varName + unitOf(S.varName) : S.varName + ', ' + (d1 || 'dataset 1') + unitOf(S.varName);
+  var yLabel = vm ? S.varName2 + unitOf(S.varName2) : S.varName + ', ' + (d2 || 'dataset 2') + unitOf(S.varName);
   ctx.textAlign = 'center'; ctx.textBaseline = 'top';
   drawLabelWithSup(ctx, xLabel, R.x + R.w / 2, R.y + R.h + 20, 'center');
   ctx.save(); ctx.translate(14, R.y + R.h / 2); ctx.rotate(-Math.PI / 2); ctx.textBaseline = 'middle';
@@ -2992,6 +3028,15 @@ document.getElementById('linkScales').onchange = function(e){ S.linkScales = e.t
 document.getElementById('autoRangePrecision').onchange = function(e){ S.autoRangePrecision = e.target.checked; recomputeAll(); };
 document.getElementById('vmin').oninput = function(e){ S.vmin = +e.target.value; setAllLimits([S.vmin, S.vmax]); draw(); };
 document.getElementById('vmax').oninput = function(e){ S.vmax = +e.target.value; setAllLimits([S.vmin, S.vmax]); draw(); };
+document.getElementById('cmapSel2').onchange = function(e){ S.cmap2 = e.target.value; draw(); };
+function setAutoRange2(on) {
+  S.autoRange2 = on;
+  document.getElementById('autoRange2').checked = on;
+  document.getElementById('vmin2').disabled = on; document.getElementById('vmax2').disabled = on;
+}
+document.getElementById('autoRange2').onchange = function(e){ setAutoRange2(e.target.checked); setSecondLimits(); draw(); };
+document.getElementById('vmin2').oninput = function(e){ S.vmin2 = +e.target.value; setSecondLimits(); draw(); };
+document.getElementById('vmax2').oninput = function(e){ S.vmax2 = +e.target.value; setSecondLimits(); draw(); };
 document.getElementById('addCond').onclick = function(){ if(!S.model)return; S.conditions.push({varName:S.model.varNames[0],op:'>=',value:0}); renderConds(); };
 document.addEventListener('click', function(e){
   var b = e.target && e.target.closest ? e.target.closest('.dl') : null;
@@ -3083,7 +3128,10 @@ function renderDatasetPicker() {
       edit.setAttribute('aria-label', 'Edit dataset label for ' + entry.name);
       edit.onclick = function() {
         var label = window.prompt('Label for ' + entry.name + ' (saved for this session). Leave blank to restore the automatic label:', entry.label);
-        if (label !== null) { loadCtl.localFiles[entry.id].label = label.trim() || null; renderDatasetPicker(); document.getElementById('datasetToggle').focus(); }
+        if (label !== null) {
+          loadCtl.localFiles[entry.id].label = label.trim() || null; renderDatasetPicker(); document.getElementById('datasetToggle').focus();
+          if (S.model) { updateTitles(); draw(); }   // panel titles and regression axes use the label
+        }
       };
       wrap.appendChild(edit);
     }
@@ -3214,7 +3262,7 @@ function setVariable2(n) {
     setStatus('Dataset 2 removed: comparing two variables of dataset 1 instead.', 'ok');
   }
   S.varName2 = n || null; S.cmpHL = null;
-  if (n) S.cmap2 = defaultCmapFor(n);
+  if (n) { S.cmap2 = defaultCmapFor(n); setAutoRange2(true); }   // a new variable 2 starts auto-fitted
   updateVarDesc(); renderVarPicker(); updateCompareLayout(); recomputeAll();
 }
 function chooseVariable(n, second) {
