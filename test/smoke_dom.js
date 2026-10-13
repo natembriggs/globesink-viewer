@@ -94,7 +94,7 @@ try {
   var m = html.match(/<script>([\s\S]*?)<\/script>\s*<\/body>/);
   if (!m) throw new Error('could not extract inline script');
   // strict-mode eval keeps declarations local, so expose what we need to assert on
-  eval(m[1] + '\n;globalThis.__gv = { S: S, recomputeAll: recomputeAll, recomputeKeep: recomputeKeep, loadModelFromBuffer: loadModelFromBuffer, loadPublished: loadPublished, panelRects: panelRects, landLoaded: function(){ return LAND != null; }, land: function(){ return LAND; }, csvSectionGrid: csvSectionGrid, csvMapLong: csvMapLong, jsonExport: jsonExport, draw: draw, buildRotatedAxis: buildRotatedAxis, axisPixelToDataCol: axisPixelToDataCol, wrapMod: wrapMod, secGeom: function(){ return secGeom; }, latMonthGeom: function(){ return latMonthGeom; }, depthLatGeom: function(){ return depthLatGeom; }, depthLatBox: depthLatBox, commitDepthLatBox: commitDepthLatBox, latMonthBox: latMonthBox, commitLatMonthBox: commitLatMonthBox, productSet: productSet, bboxRange: bboxRange, syncAnchors: syncAnchors, precisionToggleShown: function(){ return document.getElementById(\'autoRangePrecision\').style.display !== \'none\'; }, loadCtl: loadCtl, setModel2FromBuffer: setModel2FromBuffer, cmpCtl: cmpCtl, compareOn: compareOn, regressionPoints: regressionPoints, regGeom: function(){ return regGeom; }, regressionClick: regressionClick, secGeom2: function(){ return secGeom2; }, mapGeom2: function(){ return mapGeom2; }, loadCompare: loadCompare, chooseDataset: chooseDataset, datasetSlot: datasetSlot, datasetEntries: datasetEntries, renderDatasetPicker: renderDatasetPicker, localDatasetMetadata: localDatasetMetadata, localDatasetLabel: localDatasetLabel, varPairOn: varPairOn, pairOn: pairOn, chooseVariable: chooseVariable, setVariable2: setVariable2, varSlot: varSlot, highlightCell: highlightCell, regColorAvailable: regColorAvailable };');
+  eval(m[1] + '\n;globalThis.__gv = { S: S, recomputeAll: recomputeAll, recomputeKeep: recomputeKeep, loadModelFromBuffer: loadModelFromBuffer, loadPublished: loadPublished, panelRects: panelRects, landLoaded: function(){ return LAND != null; }, land: function(){ return LAND; }, csvSectionGrid: csvSectionGrid, csvMapLong: csvMapLong, jsonExport: jsonExport, draw: draw, buildRotatedAxis: buildRotatedAxis, axisPixelToDataCol: axisPixelToDataCol, wrapMod: wrapMod, secGeom: function(){ return secGeom; }, latMonthGeom: function(){ return latMonthGeom; }, depthLatGeom: function(){ return depthLatGeom; }, depthLatBox: depthLatBox, commitDepthLatBox: commitDepthLatBox, latMonthBox: latMonthBox, commitLatMonthBox: commitLatMonthBox, productSet: productSet, bboxRange: bboxRange, syncAnchors: syncAnchors, precisionToggleShown: function(){ return document.getElementById(\'autoRangePrecision\').style.display !== \'none\'; }, loadCtl: loadCtl, setModel2FromBuffer: setModel2FromBuffer, cmpCtl: cmpCtl, compareOn: compareOn, regressionPoints: regressionPoints, regGeom: function(){ return regGeom; }, regressionClick: regressionClick, secGeom2: function(){ return secGeom2; }, mapGeom2: function(){ return mapGeom2; }, loadCompare: loadCompare, chooseDataset: chooseDataset, datasetSlot: datasetSlot, datasetEntries: datasetEntries, renderDatasetPicker: renderDatasetPicker, localDatasetMetadata: localDatasetMetadata, localDatasetLabel: localDatasetLabel, varPairOn: varPairOn, pairOn: pairOn, chooseVariable: chooseVariable, setVariable2: setVariable2, varSlot: varSlot, highlightCell: highlightCell, regColorAvailable: regColorAvailable, yorkFit: yorkFit, olsFit: olsFit, olsFitXonY: olsFitXonY, regWeightAvailable: regWeightAvailable };');
   var G = globalThis.__gv, S = G.S;
   var recomputeAll = G.recomputeAll, recomputeKeep = G.recomputeKeep;
   // the app now starts blank; drive the file-load path directly
@@ -698,6 +698,24 @@ try {
     chk('colour options per point kind', G.regColorAvailable('cells', 'depth') && !G.regColorAvailable('map', 'depth') && G.regColorAvailable('map', 'lon') && !G.regColorAvailable('section', 'lat'));
     S.regColor = 'depth'; S.regMode = 'map'; G.draw(); chk('unavailable colouring falls back silently', !!G.regGeom());
     S.regColor = 'none'; S.regMode = 'section';
+    // regression fits: York (2004) on the Pearson/York test data, and the type I variants
+    (function () {
+      var x = [0, 0.9, 1.8, 2.6, 3.3, 4.4, 5.2, 6.1, 6.5, 7.4], y = [5.9, 5.4, 4.4, 4.6, 3.5, 3.7, 2.8, 2.8, 2.4, 1.5];
+      var wx = [1000, 1000, 500, 800, 200, 80, 60, 20, 1.8, 1], wy = [1, 1.8, 4, 8, 20, 20, 70, 70, 100, 500];
+      var f = G.yorkFit(x, y, wx.map(function (w) { return 1 / Math.sqrt(w); }), wy.map(function (w) { return 1 / Math.sqrt(w); }));
+      chk('York fit matches the published Pearson/York result', Math.abs(f.b + 0.4805) < 1e-3 && Math.abs(f.a - 5.4799) < 1e-3);
+      var one = x.map(function () { return 1; }), o = G.olsFit(x, y), r = Math.sqrt(o.r2);
+      var sd = function (a) { var m = 0; a.forEach(function (v) { m += v; }); m /= a.length; var q = 0; a.forEach(function (v) { q += (v - m) * (v - m); }); return Math.sqrt(q / (a.length - 1)); };
+      var sma = G.yorkFit(x, y, x.map(function () { return sd(x); }), y.map(function () { return sd(y); }));
+      chk('York with σ = standard deviations is the standardised major axis', Math.abs(sma.b + sd(y) / sd(x)) < 1e-6);
+      var xy = G.olsFitXonY(x, y);
+      chk('type I x|y slope = y-on-x slope / r²', Math.abs(xy.b - o.b / o.r2) < 1e-9 && !!G.yorkFit(x, y, one, one));
+    })();
+    S.regFit = 'york';
+    ['equal', 'n_bbp', 'precision'].forEach(function (w) { S.regWeight = w; G.draw(); });
+    chk('type II regression draws with each weighting', !!G.regGeom() && G.regWeightAvailable('n_bbp'));
+    S.regMode = 'cells'; S.regWeight = 'n_bbp'; recomputeAll(); G.draw(); chk('type II n_bbp on 4-D cells draws', !!G.regGeom());
+    S.regMode = 'section'; S.regFit = 'xy'; G.draw(); S.regFit = 'yx'; S.regWeight = 'equal';
     S.log = true; recomputeAll(); G.draw(); S.log = false;
     var Pl = G.regressionPoints();
     chk('log-scale regression ok', every(Pl, function (i) { return Pl.x[i] > 0 && Pl.y[i] > 0; }));
