@@ -130,6 +130,11 @@ selection stays on each panel as a thin magenta rectangle.
 - A top-bar link to the **full published dataset and documentation** on Zenodo.
 - **Land overlay:** a 50 m coastline (islands down to ~Kerguelen) is drawn over
   the map, masking the data under land.
+- **Southern Ocean fronts:** the **SO fronts** button (Map overlay) draws the
+  five Antarctic Circumpolar Current fronts of Park & Durand (2019) over the map,
+  dark to light from north to south: Northern Boundary, Subantarctic Front,
+  Polar Front, Southern ACC Front and Southern Boundary (as on the GLOBESINK
+  MATLAB maps).
 
 ## Comparing two datasets
 
@@ -412,6 +417,14 @@ Regenerate it with `python3 tools/make_coastline.py <ne_50m_land.geojson>`
 (source not vendored). It is drawn as filled polygons over the map, so it also
 hides data under land; the numeric averages still include those cells (which
 are normally missing over land in the ocean product anyway).
+
+## Southern Ocean fronts data
+
+`vendor/so_fronts.json` holds the Antarctic Circumpolar Current fronts of
+Park, Y.-H. and Durand, I. (2019), *Altimetry-derived Antarctic Circumpolar
+Current fronts*, SEANOE (CC-BY), simplified to 0.02°. It is made, with the zones
+between the fronts, by `globesink.web.fronts` in globesink-py (its
+`web/static/so_fronts.json`); copy that file here after regenerating it.
 
 ## Notes / possible additions
 

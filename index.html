@@ -182,6 +182,9 @@
       <button type="button" class="tog" id="secProfiles" title="Show monthly mean and depth profile around the time × depth section">section</button><button type="button" class="tog" id="mapProfiles" title="Show longitude and latitude profiles around the map">map</button>
     </div>
   </div>
+  <div class="grp"><label>Map overlay</label>
+    <div class="seg"><button type="button" class="tog" id="showFronts" title="Southern Ocean fronts (Park &amp; Durand 2019), dark to light from north to south: Northern Boundary, Subantarctic Front, Polar Front, Southern ACC Front, Southern Boundary">SO fronts</button></div>
+  </div>
   <div class="grp"><label>Extra panels</label>
     <div class="seg"><button type="button" class="tog" id="extraPanels" title="Add lat×depth and month×lat panels below the two main panels, averaged over the ranges currently selected on them">show below</button></div>
   </div>
@@ -371,6 +374,7 @@ function defaultCmapFor(v){
 }
 var MISSING_COLOR = [228,230,233];
 var LAND_FILL = '#d3d7dd', LAND_STROKE = '#6b7178';
+var FRONTS = null;           // Southern Ocean fronts: [{code, name, lon: [...], lat: [...]}], north to south
 var LAND = null;            // array of polygons; polygon = array of rings (flat [lon,lat,...])
 var _landCache = { key: '', paths: null };
 
@@ -394,7 +398,7 @@ function ramp(stops, t) {
 var S = {
   model: null, varName: null, cmap: 'reds', log: false, strict: false,
   weightMode: 'physical',
-  secProfiles: false, mapProfiles: false, extraPanels: false,
+  secProfiles: false, mapProfiles: false, extraPanels: false, showFronts: false,
   autoRange: true, linkScales: true, autoRangePrecision: true, vmin: 0, vmax: 1,
   secLim: [0, 1], mapLim: [0, 1],
   secMonthLim: [0, 1], secDepthLim: [0, 1], mapLonLim: [0, 1], mapLatLim: [0, 1],
@@ -1611,6 +1615,44 @@ function loadLand() {
   }).catch(function () { /* land overlay is optional */ });
 }
 
+// Load the Southern Ocean fronts the first time they are shown.
+var _frontsAsked = false;
+function loadFronts() {
+  if (_frontsAsked) return;
+  _frontsAsked = true;
+  fetch('vendor/so_fronts.json').then(function (r) { return r.ok ? r.json() : null; }).then(function (j) {
+    if (!j) { _frontsAsked = false; return; }
+    FRONTS = j.fronts;
+    if (S.model) draw();
+  }).catch(function () { _frontsAsked = false; });
+}
+
+// Southern Ocean fronts (vendor/so_fronts.json, made by globesink-py's web/fronts.py from
+// Park & Durand 2019; the lines MATLAB's plotParkDurantFronts draws on the GLOBESINK maps).
+// Each line's longitudes already run continuously from -180 to 180, so — as for the land —
+// it is drawn as one path at three shifts a panel-width apart and clipped to the panel.
+// Greys dark (NB) to light (SB), as in MATLAB.
+function drawFronts(ctx, R, lonEdges, lon0, lon1, lat0, lat1) {
+  if (!S.showFronts || !FRONTS) return;
+  var span = lon1 - lon0, sy = R.h / (lat1 - lat0), lonAtOffset = lonEdges[S.lonOffset];
+  ctx.save();
+  ctx.beginPath(); ctx.rect(R.x, R.y, R.w, R.h); ctx.clip();
+  ctx.lineWidth = 1.2; ctx.lineJoin = 'round';
+  FRONTS.forEach(function (f, k) {
+    var g = Math.round(255 * (0.12 + 0.12 * k));
+    ctx.strokeStyle = 'rgb(' + g + ',' + g + ',' + g + ')';
+    ctx.beginPath();
+    for (var shift = -1; shift <= 1; shift++) {
+      for (var i = 0; i < f.lon.length; i++) {
+        var x = R.x + ((f.lon[i] - lonAtOffset) / span + shift) * R.w, y = R.y + R.h - (f.lat[i] - lat0) * sy;
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      }
+    }
+    ctx.stroke();
+  });
+  ctx.restore();
+}
+
 // Filled land polygons (opaque, so they hide the data beneath) with coastline
 // outlines, honouring the current longitude pan. Cached per geometry so
 // dragging stays smooth. Holes (inland water) are cut out via even-odd fill
@@ -1865,6 +1907,7 @@ function drawMap(sharedH, two) {
   ctx.clearRect(0,0,cssW,cssH);
   if (arr) drawCells(ctx, R, nX, nY, lonAxis, yEdgePix, function (r, c) { return arr[r * nX + c]; }, lim);
   else drawMissingVar(ctx, R);
+  drawFronts(ctx, R, lonE, lon0, lon1, lat0, lat1);
   drawLand(ctx, R, lonE, lon0, lon1, lat0, lat1);
   frame(ctx, R);
   axisStyle(ctx); ctx.textAlign='center'; ctx.textBaseline='top';
@@ -3203,6 +3246,7 @@ document.getElementById('weightSel').onchange = function(e){ S.weightMode = e.ta
   recomputeAll(); };
 document.getElementById('secProfiles').onchange = function(e){ S.secProfiles = e.target.checked; recomputeAll(); };
 document.getElementById('mapProfiles').onchange = function(e){ S.mapProfiles = e.target.checked; recomputeAll(); };
+document.getElementById('showFronts').onchange = function(e){ S.showFronts = e.target.checked; loadFronts(); if (S.model) draw(); };
 document.getElementById('extraPanels').onchange = function(e){
   S.extraPanels = e.target.checked;
   document.getElementById('plots2').style.display = S.extraPanels ? 'flex' : 'none';
